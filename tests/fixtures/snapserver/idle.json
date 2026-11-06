@@ -1,0 +1,67 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "server": {
+      "groups": [
+        {
+          "id": "group-a",
+          "muted": false,
+          "name": "",
+          "stream_id": "Airplay",
+          "clients": [
+            {
+              "id": "client-living",
+              "connected": true,
+              "config": {
+                "instance": 1,
+                "latency": 0,
+                "name": "Living room",
+                "volume": {"muted": false, "percent": 62}
+              },
+              "host": {"arch": "aarch64", "name": "pi-living", "os": "Raspbian"},
+              "lastSeen": {"sec": 1730000000, "usec": 0}
+            }
+          ]
+        }
+      ],
+      "server": {
+        "host": {"arch": "x86_64", "name": "zimablade", "os": "Debian"},
+        "snapserver": {
+          "name": "Snapserver",
+          "version": "0.27.0",
+          "protocolVersion": 1,
+          "controlProtocolVersion": 1
+        }
+      },
+      "streams": [
+        {
+          "id": "Airplay",
+          "status": "idle",
+          "uri": {
+            "raw": "airplay:///shairport-sync?name=Airplay",
+            "scheme": "airplay",
+            "host": "",
+            "path": "/shairport-sync",
+            "fragment": "",
+            "query": {"name": "Airplay"}
+          },
+          "properties": {"playbackStatus": "stopped", "metadata": {}}
+        },
+        {
+          "id": "Bluetooth",
+          "status": "idle",
+          "uri": {
+            "raw": "bluetooth:///bluealsa?name=Bluetooth",
+            "scheme": "bluetooth",
+            "host": "",
+            "path": "/bluealsa",
+            "fragment": "",
+            "query": {"name": "Bluetooth"}
+          },
+          "properties": {"playbackStatus": "stopped", "metadata": {}}
+        }
+      ]
+    }
+  }
+}

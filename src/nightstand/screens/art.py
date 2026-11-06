@@ -12,10 +12,9 @@ from PIL import Image, ImageDraw
 
 from nightstand.models import ArtPiece
 from nightstand.palette import PURE, dither_to_panel, to_six_colors
+from nightstand.screens.common import HEIGHT, WIDTH
 from nightstand.text import font, wrap
 
-WIDTH = 800
-HEIGHT = 480
 CAPTION_HEIGHT = 44
 CAPTION_PADDING = 16
 CAPTION_SIZE = 24
