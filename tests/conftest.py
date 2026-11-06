@@ -31,14 +31,22 @@ OUT_DIR = GOLDEN_DIR / "_out"
 
 # At most this fraction of pixels may differ. 800x480 is 384000 pixels, so this
 # is about 1920 pixels. Measured arm64-vs-x86_64 glyph-edge noise is about 1000
-# pixels (0.27%) for these screens, so this clears it with margin while staying
-# far below any real layout or content change, which moves many thousands.
+# pixels (0.27%) for the art and placeholder screens, so this clears it with
+# margin while staying far below any real layout or content change, which moves
+# many thousands.
+#
+# Text-heavy screens need more headroom: their larger, bolder glyphs have more
+# anti-aliased edge pixels that snap to a different side of the six-color
+# threshold on arm64 than on x86_64, so a caller can pass a higher ``tolerance``
+# for those. See the now-playing screen, measured at about 1.9%.
 TOLERANCE = 0.005
 
 
 @pytest.fixture
 def assert_golden() -> Callable[[Image.Image, str], None]:
-    def _assert_golden(img: Image.Image, name: str) -> None:
+    def _assert_golden(
+        img: Image.Image, name: str, tolerance: float = TOLERANCE
+    ) -> None:
         path = GOLDEN_DIR / name
         actual = img.convert("RGB")
         if os.environ.get("UPDATE_GOLDENS") == "1":
@@ -60,7 +68,7 @@ def assert_golden() -> Callable[[Image.Image, str], None]:
             for count, color in diff.getcolors(maxcolors=total)
             if color != (0, 0, 0)
         )
-        if differing / total <= TOLERANCE:
+        if differing / total <= tolerance:
             return
 
         OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -69,7 +77,7 @@ def assert_golden() -> Callable[[Image.Image, str], None]:
         diff.point(lambda v: min(255, v * 8)).save(OUT_DIR / f"{stem}.diff.png")
         raise AssertionError(
             f"{name} differs from its golden: {differing}/{total} pixels "
-            f"({differing / total:.4%}) exceed the {TOLERANCE:.2%} tolerance. "
+            f"({differing / total:.4%}) exceed the {tolerance:.2%} tolerance. "
             f"See {OUT_DIR}/{stem}.actual.png and {stem}.diff.png."
         )
 

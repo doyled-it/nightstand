@@ -9,10 +9,9 @@ from __future__ import annotations
 from PIL import Image, ImageDraw
 
 from nightstand.palette import PURE, to_six_colors
+from nightstand.screens.common import HEIGHT, WIDTH
 from nightstand.text import font, wrap
 
-WIDTH = 800
-HEIGHT = 480
 MESSAGE_SIZE = 44
 PADDING = 48
 MAX_LINES = 3
