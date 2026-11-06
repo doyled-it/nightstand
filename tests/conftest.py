@@ -3,6 +3,15 @@
 ``assert_golden`` compares a rendered image against a stored golden PNG, pixel
 for pixel. Set ``UPDATE_GOLDENS=1`` to write the golden instead of comparing,
 which is how goldens are (re)generated after a deliberate visual change.
+
+The goldens are Linux-rendered, matching CI and the Raspberry Pi (the real
+render target). Text anti-aliasing is FreeType-build-specific, so regenerate
+them on Linux, not macOS, or the text pixels will not match. For example:
+
+    docker run --rm --platform linux/amd64 -v "$PWD":/repo -w /repo \\
+      -e UV_PROJECT_ENVIRONMENT=/tmp/venv \\
+      ghcr.io/astral-sh/uv:python3.13-bookworm-slim \\
+      bash -c "uv sync && UPDATE_GOLDENS=1 uv run pytest tests/test_screens_art.py"
 """
 
 from __future__ import annotations
