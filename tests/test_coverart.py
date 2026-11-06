@@ -35,6 +35,7 @@ class FakeServer:
         self.art_bytes = art_bytes
         self.calls: list[tuple[str, str]] = []
         self.user_agents: list[str | None] = []
+        self.accept_encodings: list[str | None] = []
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -47,6 +48,7 @@ class FakeServer:
         host = request.url.host
         self.calls.append((host, request.url.path))
         self.user_agents.append(request.headers.get("user-agent"))
+        self.accept_encodings.append(request.headers.get("accept-encoding"))
         if host == "musicbrainz.org":
             return httpx.Response(200, json={"releases": self.releases})
         if host == "coverartarchive.org":
@@ -207,6 +209,29 @@ def test_decompression_bomb_is_refused(tmp_path, monkeypatch):
     # Lower Pillow's pixel ceiling so a tiny test image trips the bomb guard.
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
     server = FakeServer(art_bytes=_png_bytes())
+    with httpx.Client(transport=server.transport) as client:
+        result = CoverArt(client, tmp_path).for_track(_airplay())
+
+    assert result is None
+
+
+def test_image_download_disables_compression(tmp_path):
+    server = FakeServer(art_bytes=_png_bytes())
+    with httpx.Client(transport=server.transport) as client:
+        CoverArt(client, tmp_path).for_track(_airplay())
+
+    hosts = [host for host, _ in server.calls]
+    idx = hosts.index("hub.local")
+    # The image request opts out of content-encoding, so a small compressed body
+    # cannot amplify into an unbounded decoded stream past the byte cap.
+    assert server.accept_encodings[idx] == "identity"
+
+
+def test_oversized_dimensions_are_refused_before_decode(tmp_path, monkeypatch):
+    # An image whose declared dimensions exceed the cover-sized pixel cap is
+    # rejected before Pillow decodes it, even when its byte size is small.
+    monkeypatch.setattr(coverart, "_MAX_PIXELS", 10)
+    server = FakeServer(art_bytes=_png_bytes())  # 8x8 = 64 px > 10
     with httpx.Client(transport=server.transport) as client:
         result = CoverArt(client, tmp_path).for_track(_airplay())
 

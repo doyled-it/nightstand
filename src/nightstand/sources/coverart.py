@@ -39,8 +39,11 @@ _MISS_TTL = 7 * 24 * 60 * 60  # a cached miss is honoured for seven days
 _NONE_SUFFIX = ".none"
 _TIMEOUT = 10.0
 # A cover is tiny; cap the download so a hostile or broken source cannot stream
-# an unbounded body into memory on the device.
+# an unbounded body into memory on the device. Compression is refused on the
+# request, so the byte cap bounds the raw body, and the pixel cap rejects an
+# outsized image by its declared dimensions before it is decoded.
 _MAX_BYTES = 10 * 1024 * 1024
+_MAX_PIXELS = 4096 * 4096
 
 
 class CoverArt:
@@ -145,7 +148,9 @@ class CoverArt:
             with self._client.stream(
                 "GET",
                 url,
-                headers={"User-Agent": USER_AGENT},
+                # Refuse content-encoding so a small compressed body cannot
+                # amplify past the byte cap; covers are already-compressed images.
+                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"},
                 follow_redirects=follow_redirects,
                 timeout=_TIMEOUT,
             ) as response:
@@ -202,13 +207,19 @@ def _declared_length(response: httpx.Response) -> int:
 def _decode(data: bytes | None) -> Image.Image | None:
     """Load ``data`` as an image, or ``None`` if it is empty or not an image.
 
-    The bytes are untrusted, so any failure, including a Pillow decompression
-    bomb guard firing, resolves to ``None`` rather than raising into the caller.
+    The bytes are untrusted, so any failure resolves to ``None`` rather than
+    raising into the caller. An image whose declared dimensions exceed the
+    cover-sized pixel cap is rejected before it is decoded, which stops an
+    outsized image short of Pillow's own 2x decompression-bomb threshold.
     """
     if not data:
         return None
     try:
         with Image.open(io.BytesIO(data)) as image:
+            width, height = image.size
+            if width * height > _MAX_PIXELS:
+                logger.warning("cover is %dx%d, past the pixel cap", width, height)
+                return None
             image.load()
             return image.copy()
     except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
