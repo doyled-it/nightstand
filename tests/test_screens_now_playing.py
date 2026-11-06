@@ -63,6 +63,48 @@ def test_render_without_cover_is_six_color():
     assert _is_six_color(now_playing.render(a_now_playing(), None))
 
 
+def _vertical_span(img: Image.Image, box: tuple[int, int, int, int]):
+    """The bbox of non-white pixels inside ``box``, relative to the box top-left."""
+    region = img.crop(box)
+    white = Image.new("RGB", region.size, PURE["white"])
+    return ImageChops.difference(region, white).getbbox()
+
+
+def test_maximal_text_block_does_not_overlap_chip_row():
+    # The tallest the text column can draw: three title lines, two artist lines,
+    # and an album line. It must still clear the room-chip row at the bottom.
+    text_only = NowPlaying(
+        title="Movement " * 10,
+        artist="The Collective Ensemble of " * 3,
+        album="Longplaying Anthology Deluxe Reissue",
+        art_url="http://hub.local/art/blue-hour.jpg",
+        rooms=(),
+    )
+    rendered_text = now_playing.render(text_only, sample_cover()).convert("RGB")
+    column = (now_playing.TEXT_X_WITH_COVER, 0, now_playing.TEXT_RIGHT, 480)
+    text_bbox = _vertical_span(rendered_text, column)
+    assert text_bbox is not None, "expected the text column to draw something"
+    text_bottom = text_bbox[3]
+
+    chips_only = NowPlaying(
+        title="A",
+        artist="",
+        album=None,
+        art_url="http://hub.local/art/blue-hour.jpg",
+        rooms=("Living room", "Bedroom"),
+    )
+    rendered_chips = now_playing.render(chips_only, sample_cover()).convert("RGB")
+    band_top = 300
+    band = (now_playing.TEXT_X_WITH_COVER, band_top, now_playing.TEXT_RIGHT, 480)
+    chip_bbox = _vertical_span(rendered_chips, band)
+    assert chip_bbox is not None, "expected the chip row to draw something"
+    chip_top = band_top + chip_bbox[1]
+
+    assert text_bottom < chip_top, (
+        f"text block reached y={text_bottom}, into the chip row at y={chip_top}"
+    )
+
+
 def test_long_title_stays_within_text_column():
     long_title = "Movement " * 40  # 360 characters
     np = a_now_playing(title=long_title.strip())

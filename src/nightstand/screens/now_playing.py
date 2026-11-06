@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 
 from nightstand.models import NowPlaying
 from nightstand.palette import PURE, dither_to_panel, to_six_colors
-from nightstand.screens.common import HEIGHT, WIDTH
+from nightstand.screens.common import HEIGHT, WIDTH, cover_crop
 from nightstand.text import font, wrap
 
 COVER_SIZE = 480
@@ -39,7 +39,10 @@ CHIP_SIZE = 22
 CHIP_PAD_X = 12
 CHIP_PAD_Y = 5
 CHIP_GAP = 6
-CHIP_BOTTOM = 446
+# The chip row sits near the bottom edge so it clears the tallest text block the
+# column can draw (three title lines, two artist lines, an album line, which
+# reaches about y=418). Its top lands around y=428, leaving a small gap above.
+CHIP_BOTTOM = 466
 
 
 def render(np: NowPlaying, cover: Image.Image | None) -> Image.Image:
@@ -48,7 +51,7 @@ def render(np: NowPlaying, cover: Image.Image | None) -> Image.Image:
     draw = ImageDraw.Draw(canvas)
 
     if cover is not None:
-        square = _square_crop(cover.convert("RGB"), COVER_SIZE)
+        square = cover_crop(cover.convert("RGB"), COVER_SIZE, COVER_SIZE)
         canvas.paste(dither_to_panel(square), (0, 0))
         text_x = TEXT_X_WITH_COVER
     else:
@@ -127,16 +130,3 @@ def _draw_chips(
             anchor="la",
         )
         cx += chip_width + CHIP_GAP
-
-
-def _square_crop(image: Image.Image, size: int) -> Image.Image:
-    source_width, source_height = image.size
-    scale = max(size / source_width, size / source_height)
-    scaled = image.resize(
-        (round(source_width * scale), round(source_height * scale)),
-        Image.Resampling.LANCZOS,
-    )
-    scaled_width, scaled_height = scaled.size
-    left = (scaled_width - size) // 2
-    top = (scaled_height - size) // 2
-    return scaled.crop((left, top, left + size, top + size))

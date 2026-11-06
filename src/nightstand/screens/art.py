@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw
 
 from nightstand.models import ArtPiece
 from nightstand.palette import PURE, dither_to_panel, to_six_colors
-from nightstand.screens.common import HEIGHT, WIDTH
+from nightstand.screens.common import HEIGHT, WIDTH, cover_crop
 from nightstand.text import font, wrap
 
 CAPTION_HEIGHT = 44
@@ -22,7 +22,7 @@ CAPTION_SIZE = 24
 
 def render(piece: ArtPiece, image: Image.Image) -> Image.Image:
     """Render ``piece`` over ``image`` at 800x480."""
-    cropped = _cover_crop(image.convert("RGB"), WIDTH, HEIGHT)
+    cropped = cover_crop(image.convert("RGB"), WIDTH, HEIGHT)
     canvas = dither_to_panel(cropped)
 
     draw = ImageDraw.Draw(canvas)
@@ -49,16 +49,3 @@ def _caption(piece: ArtPiece) -> str:
     if piece.artist:
         return f"{piece.title} · {piece.artist}"
     return piece.title
-
-
-def _cover_crop(image: Image.Image, width: int, height: int) -> Image.Image:
-    source_width, source_height = image.size
-    scale = max(width / source_width, height / source_height)
-    scaled = image.resize(
-        (round(source_width * scale), round(source_height * scale)),
-        Image.Resampling.LANCZOS,
-    )
-    scaled_width, scaled_height = scaled.size
-    left = (scaled_width - width) // 2
-    top = (scaled_height - height) // 2
-    return scaled.crop((left, top, left + width, top + height))
