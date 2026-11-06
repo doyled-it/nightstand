@@ -103,3 +103,43 @@ def test_preview_game_renders_from_fixture(tmp_path, monkeypatch):
     colors = rendered.getcolors(maxcolors=256)
     assert colors is not None
     assert {color for _, color in colors} <= set(PURE.values())
+
+
+def test_preview_game_succeeds_when_configured_cache_dir_is_unwritable(
+    tmp_path, monkeypatch
+):
+    # The service cache default (/var/lib/nightstand) is not writable on a dev
+    # Mac with no root, so a preview must fall back to a per-user cache dir
+    # instead of failing. A regular file stands in for the unwritable location:
+    # the configured cache dir cannot be created under it, even as root.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    config = tmp_path / "local.toml"
+    config.write_text(f'[paths]\ncache = "{blocker / "cache"}"\n')
+    monkeypatch.setenv("NIGHTSTAND_CONFIG", str(config))
+
+    # Point the per-user fallback at a tmp dir pre-seeded with logos, so the
+    # render needs no network once the fallback is chosen.
+    fallback = tmp_path / "user-cache"
+    monkeypatch.setattr("nightstand.cli._user_cache_dir", lambda: fallback)
+    _seed_logo(fallback / "logos" / "135.png")
+    _seed_logo(fallback / "logos" / "134.png")
+    out = tmp_path / "game.png"
+
+    code = main(
+        [
+            "preview",
+            "game",
+            "--fixture",
+            str(MLB_FIXTURES / "feed_scoring_play.json"),
+            "-o",
+            str(out),
+        ]
+    )
+
+    assert code == 0
+    rendered = Image.open(out).convert("RGB")
+    assert rendered.size == (800, 480)
+    colors = rendered.getcolors(maxcolors=256)
+    assert colors is not None
+    assert {color for _, color in colors} <= set(PURE.values())

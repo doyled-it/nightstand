@@ -311,12 +311,16 @@ def _latest(games: list[dict]) -> int | None:
 
 
 def _decode(data: bytes | None) -> Image.Image | None:
-    """Load ``data`` as an image, or ``None`` if it is empty or not an image."""
+    """Load ``data`` as an RGBA image, or ``None`` if it is not an image.
+
+    The logos are palette PNGs with transparency expressed in bytes. Converting
+    to RGBA on load settles that transparency now, so a later conversion stays
+    pristine instead of emitting Pillow's "should be converted to RGBA" warning.
+    """
     if not data:
         return None
     try:
         with Image.open(io.BytesIO(data)) as image:
-            image.load()
-            return image.copy()
+            return image.convert("RGBA")
     except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
         return None

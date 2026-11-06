@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+import warnings
 from datetime import date
 from pathlib import Path
 
 import httpx
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
+from nightstand.screens import game
 from nightstand.sources import mlb
 from nightstand.sources.mlb import GameState, Team
 
@@ -248,6 +250,50 @@ def test_logo_missing_returns_none(tmp_path):
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert mlb.LogoCache(client, tmp_path).for_team(999) is None
+
+
+def _palette_png_with_byte_transparency() -> bytes:
+    """A palette PNG whose transparency is expressed in bytes, like MLB's logos.
+
+    Loading such an image and converting it later makes Pillow warn unless it is
+    first converted to RGBA. Intermediate alpha values keep the transparency as
+    bytes (not a single index) when the PNG is reopened, so the warning fires.
+    """
+    img = Image.new("P", (150, 150), 0)
+    img.putpalette([255, 255, 255, 0, 0, 255, 0, 255, 0] + [0] * (256 * 3 - 9))
+    ImageDraw.Draw(img).ellipse([10, 10, 140, 140], fill=1)
+    ImageDraw.Draw(img).ellipse([60, 60, 90, 90], fill=2)
+    img.info["transparency"] = bytes([0, 128, 255] + [255] * 253)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_logo_with_palette_transparency_loads_and_renders_without_warning(tmp_path):
+    png = _palette_png_with_byte_transparency()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=png, headers={"content-type": "image/png"})
+
+    # Any UserWarning (Pillow's palette-transparency one, in particular) becomes
+    # an error, so decoding the logo and rendering it must stay pristine.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            logo = mlb.LogoCache(client, tmp_path).for_team(135)
+        assert logo is not None
+        assert logo.mode == "RGBA"
+        state = GameState(
+            game_pk=1,
+            status="live",
+            away=Team(id=135, abbrev="SD", runs=3),
+            home=Team(id=134, abbrev="PIT", runs=1),
+            inning=7,
+            inning_state="Bottom",
+            summary="A scoring play",
+            ended_at=None,
+        )
+        game.render(state, logo, logo)
 
 
 @pytest.mark.parametrize(

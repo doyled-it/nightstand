@@ -99,10 +99,14 @@ def _draw_team(
 ) -> None:
     """Draw one column: the logo (or abbreviation) above the run total."""
     if logo is not None:
-        resized = logo.convert("RGB").resize(
+        resized = logo.convert("RGBA").resize(
             (LOGO_SIZE, LOGO_SIZE), Image.Resampling.LANCZOS
         )
-        canvas.paste(resized, (center_x - LOGO_SIZE // 2, LOGO_TOP))
+        # Composite over white so a logo's transparent background reads as the
+        # panel's background rather than a stray color when alpha is dropped.
+        box = Image.new("RGB", (LOGO_SIZE, LOGO_SIZE), PURE["white"])
+        box.paste(resized, (0, 0), resized)
+        canvas.paste(box, (center_x - LOGO_SIZE // 2, LOGO_TOP))
     else:
         draw.text(
             (center_x, LOGO_TOP + LOGO_SIZE // 2),
