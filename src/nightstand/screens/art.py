@@ -11,7 +11,7 @@ from __future__ import annotations
 from PIL import Image, ImageDraw
 
 from nightstand.models import ArtPiece
-from nightstand.palette import PURE, dither_to_panel
+from nightstand.palette import PURE, dither_to_panel, to_six_colors
 from nightstand.text import font, wrap
 
 WIDTH = 800
@@ -41,7 +41,9 @@ def render(piece: ArtPiece, image: Image.Image) -> Image.Image:
         fill=PURE["white"],
         anchor="lm",
     )
-    return canvas
+    # The dithered art is already pure, but the caption's anti-aliased edges are
+    # not. Snap the whole canvas so the panel only ever receives six colors.
+    return to_six_colors(canvas)
 
 
 def _caption(piece: ArtPiece) -> str:

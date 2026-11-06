@@ -5,7 +5,15 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from nightstand.models import ArtPiece
+from nightstand.palette import PURE
 from nightstand.screens import art, placeholder
+
+
+def _is_six_color(img: Image.Image) -> bool:
+    colors = img.convert("RGB").getcolors(maxcolors=256)
+    if colors is None:
+        return False
+    return {color for _, color in colors} <= set(PURE.values())
 
 
 def sample_image() -> Image.Image:
@@ -41,5 +49,15 @@ def test_render_art_is_panel_size(tmp_path):
     assert out.size == (800, 480)
 
 
+def test_render_art_is_six_color():
+    piece = ArtPiece(path=Path("x.jpg"), title="Coastal Study", artist="Artist Name")
+
+    assert _is_six_color(art.render(piece, sample_image()))
+
+
 def test_placeholder_matches_golden(assert_golden):
     assert_golden(placeholder.render("Add art to the share"), "placeholder.png")
+
+
+def test_placeholder_is_six_color():
+    assert _is_six_color(placeholder.render("Add art to the share"))

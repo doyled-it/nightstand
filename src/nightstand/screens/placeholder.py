@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PIL import Image, ImageDraw
 
-from nightstand.palette import PURE
+from nightstand.palette import PURE, to_six_colors
 from nightstand.text import font, wrap
 
 WIDTH = 800
@@ -41,4 +41,5 @@ def render(message: str) -> Image.Image:
             anchor="ma",
         )
         y += line_height + LINE_SPACING
-    return canvas
+    # Snap the anti-aliased text so the panel only ever receives six colors.
+    return to_six_colors(canvas)
