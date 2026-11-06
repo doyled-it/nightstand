@@ -1,0 +1,988 @@
+{
+  "gamePk": 823401,
+  "gameData": {
+    "status": {
+      "abstractGameState": "Final",
+      "detailedState": "Final"
+    },
+    "datetime": {
+      "dateTime": "2026-04-06T22:40:00Z"
+    },
+    "teams": {
+      "away": {
+        "id": 135,
+        "abbreviation": "SD"
+      },
+      "home": {
+        "id": 134,
+        "abbreviation": "PIT"
+      }
+    }
+  },
+  "liveData": {
+    "linescore": {
+      "currentInning": 9,
+      "inningState": "Bottom",
+      "teams": {
+        "away": {
+          "runs": 5
+        },
+        "home": {
+          "runs": 0
+        }
+      },
+      "innings": [
+        {
+          "num": 1,
+          "away": {
+            "runs": 0
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 2,
+          "away": {
+            "runs": 0
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 3,
+          "away": {
+            "runs": 0
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 4,
+          "away": {
+            "runs": 1
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 5,
+          "away": {
+            "runs": 2
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 6,
+          "away": {
+            "runs": 1
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 7,
+          "away": {
+            "runs": 0
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 8,
+          "away": {
+            "runs": 1
+          },
+          "home": {
+            "runs": 0
+          }
+        },
+        {
+          "num": 9,
+          "away": {
+            "runs": 0
+          },
+          "home": {
+            "runs": 0
+          }
+        }
+      ]
+    },
+    "plays": {
+      "scoringPlays": [
+        28,
+        37,
+        38,
+        47,
+        64
+      ],
+      "allPlays": [
+        {
+          "result": {
+            "description": "Ramón Laureano strikes out swinging."
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "top",
+            "endTime": "2026-04-06T22:44:36.312Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Fernando Tatis Jr. flies out to center fielder Oneil Cruz."
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "top",
+            "endTime": "2026-04-06T22:45:10.276Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jackson Merrill flies out sharply to center fielder Oneil Cruz."
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "top",
+            "endTime": "2026-04-06T22:46:57.985Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Oneil Cruz grounds out, shortstop Xander Bogaerts to first baseman Gavin Sheets."
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T22:50:07.541Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Brandon Lowe grounds out, shortstop Xander Bogaerts to first baseman Gavin Sheets."
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T22:51:09.823Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Bryan Reynolds strikes out on a foul tip."
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T22:52:56.310Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Manny Machado strikes out swinging."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "top",
+            "endTime": "2026-04-06T22:56:42.076Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Xander Bogaerts walks."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "top",
+            "endTime": "2026-04-06T22:59:18.802Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Gavin Sheets pops out to third baseman Nick Gonzales."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:00:54.058Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Castellanos singles on a line drive to left fielder Bryan Reynolds. Xander Bogaerts to 2nd."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:01:35.824Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Freddy Fermin strikes out on a foul tip."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:04:01.121Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ryan O'Hearn walks."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:07:56.293Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Marcell Ozuna flies out to right fielder Fernando Tatis Jr."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:08:31.491Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Gonzales singles on a ground ball to center fielder Jackson Merrill. Ryan O'Hearn to 2nd."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:09:44.805Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Spencer Horwitz singles on a ground ball to right fielder Fernando Tatis Jr., deflected by first baseman Gavin Sheets. Ryan O'Hearn out at home on the throw, right fielder Fernando Tatis Jr. to catcher Freddy Fermin. Nick Gonzales to 3rd."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:11:10.731Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Konnor Griffin grounds out to first baseman Gavin Sheets."
+          },
+          "about": {
+            "inning": 2,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:12:20.736Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jake Cronenworth singles on a ground ball to right fielder Ryan O'Hearn."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:15:29.235Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ramón Laureano grounds into a double play, second baseman Brandon Lowe to shortstop Konnor Griffin to first baseman Spencer Horwitz. Jake Cronenworth out at 2nd. Ramón Laureano out at 1st."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:16:00.004Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Fernando Tatis Jr. flies out to center fielder Oneil Cruz."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:18:02.548Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Henry Davis flies out to right fielder Fernando Tatis Jr."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:20:50.112Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Oneil Cruz strikes out swinging."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:22:28.345Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Brandon Lowe singles on a line drive to right fielder Fernando Tatis Jr."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:24:31.910Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Bryan Reynolds singles on a sharp line drive to right fielder Fernando Tatis Jr. Brandon Lowe to 3rd."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:26:37.949Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ryan O'Hearn called out on strikes."
+          },
+          "about": {
+            "inning": 3,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:30:56.254Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jackson Merrill grounds out to first baseman Spencer Horwitz."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:33:26.502Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Manny Machado walks."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:35:35.461Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Xander Bogaerts singles on a ground ball to left fielder Bryan Reynolds. Manny Machado to 2nd."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:37:15.639Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Gavin Sheets grounds into a force out, first baseman Spencer Horwitz to shortstop Konnor Griffin. Manny Machado to 3rd. Xander Bogaerts out at 2nd. Gavin Sheets to 1st."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:40:28.461Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Castellanos doubles (2) on a sharp line drive to left fielder Bryan Reynolds. Manny Machado scores. Gavin Sheets to 3rd."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:41:16.838Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Freddy Fermin strikes out swinging."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:43:16.201Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Marcell Ozuna pops out to first baseman Gavin Sheets in foul territory."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:48:01.097Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Gonzales strikes out swinging."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:49:50.339Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Spencer Horwitz singles on a ground ball to left fielder Ramón Laureano."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:52:05.407Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Konnor Griffin lines out to shortstop Xander Bogaerts."
+          },
+          "about": {
+            "inning": 4,
+            "halfInning": "bottom",
+            "endTime": "2026-04-06T23:53:12.650Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jake Cronenworth walks."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:56:23.198Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ramón Laureano grounds into a force out, shortstop Konnor Griffin to second baseman Brandon Lowe. Jake Cronenworth out at 2nd. Ramón Laureano to 1st."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "top",
+            "endTime": "2026-04-06T23:58:18.861Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Fernando Tatis Jr. walks. Ramón Laureano to 2nd."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:00:54.967Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jackson Merrill hits a ground-rule double (2) on a fly ball to left-center field. Ramón Laureano scores. Fernando Tatis Jr. to 3rd."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:02:03.425Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Manny Machado grounds out, pitcher Yohan Ramírez to first baseman Spencer Horwitz to pitcher Yohan Ramírez. Fernando Tatis Jr. scores. Jackson Merrill to 3rd."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:05:30.286Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Xander Bogaerts lines out to center fielder Oneil Cruz."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:06:41.266Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Henry Davis flies out to left fielder Ramón Laureano in foul territory."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:10:54.688Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Oneil Cruz singles on a ground ball to right fielder Fernando Tatis Jr."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:12:16.804Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Brandon Lowe pops out to third baseman Manny Machado."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:15:45.299Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Bryan Reynolds flies out to left fielder Ramón Laureano."
+          },
+          "about": {
+            "inning": 5,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:17:45.080Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Gavin Sheets grounds out, second baseman Brandon Lowe to first baseman Spencer Horwitz."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:21:50.252Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Castellanos grounds out, shortstop Konnor Griffin to first baseman Spencer Horwitz."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:24:11.431Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Freddy Fermin doubles (2) on a line drive to left fielder Bryan Reynolds."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:25:31.223Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jake Cronenworth doubles (1) on a sharp fly ball to right fielder Ryan O'Hearn. Freddy Fermin scores."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:27:23.384Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ramón Laureano flies out to second baseman Brandon Lowe."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:29:18.115Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ryan O'Hearn doubles (2) on a fly ball to left fielder Ramón Laureano."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:32:18.449Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Marcell Ozuna grounds out, shortstop Xander Bogaerts to first baseman Gavin Sheets."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:34:35.296Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Gonzales flies out to right fielder Fernando Tatis Jr. Ryan O'Hearn to 3rd."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:36:28.491Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Spencer Horwitz flies out to center fielder Jackson Merrill."
+          },
+          "about": {
+            "inning": 6,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:38:14.122Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Fernando Tatis Jr. grounds out, second baseman Brandon Lowe to first baseman Spencer Horwitz."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:41:30.268Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jackson Merrill strikes out swinging."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:43:37.043Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Manny Machado singles on a line drive to right fielder Ryan O'Hearn."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:44:33.842Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Xander Bogaerts singles on a line drive to center fielder Oneil Cruz. Manny Machado to 2nd."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:45:51.630Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Gavin Sheets strikes out swinging."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:48:23.188Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Konnor Griffin strikes out swinging."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:52:15.370Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Henry Davis walks."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:53:35.917Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Oneil Cruz lines into a double play, second baseman Jake Cronenworth to first baseman Gavin Sheets. Henry Davis out at 1st."
+          },
+          "about": {
+            "inning": 7,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T00:55:54.462Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Castellanos lines out to second baseman Brandon Lowe."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:58:46.709Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Freddy Fermin singles on a line drive to center fielder Oneil Cruz."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "top",
+            "endTime": "2026-04-07T00:59:38.940Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jake Cronenworth challenged (pitch result), call on the field was confirmed: Jake Cronenworth called out on strikes."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:01:31.328Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ramón Laureano doubles (2) on a fly ball to right fielder Ryan O'Hearn. Freddy Fermin scores."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:02:00.537Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Fernando Tatis Jr. strikes out swinging."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:04:01.793Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Brandon Lowe walks."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:10:25.991Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Bryan Reynolds walks. Brandon Lowe to 2nd."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:12:28.878Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Ryan O'Hearn grounds into a double play, second baseman Jake Cronenworth to shortstop Xander Bogaerts to first baseman Gavin Sheets. Brandon Lowe to 3rd. Bryan Reynolds out at 2nd. Ryan O'Hearn out at 1st."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:15:09.736Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Marcell Ozuna grounds out, shortstop Xander Bogaerts to first baseman Gavin Sheets."
+          },
+          "about": {
+            "inning": 8,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:16:27.182Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jackson Merrill walks."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:19:48.650Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Manny Machado called out on strikes."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:21:52.716Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Xander Bogaerts flies out to right fielder Ryan O'Hearn."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:23:31.877Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Gavin Sheets grounds out, first baseman Spencer Horwitz to pitcher Gregory Soto."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "top",
+            "endTime": "2026-04-07T01:25:24.768Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Nick Gonzales grounds out, first baseman Gavin Sheets to pitcher David Morgan."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:29:11.455Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Spencer Horwitz walks."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:31:26.076Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Konnor Griffin strikes out swinging."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:34:49.182Z",
+            "isComplete": true
+          }
+        },
+        {
+          "result": {
+            "description": "Jake Mangum bunt grounds out softly, pitcher David Morgan to first baseman Gavin Sheets."
+          },
+          "about": {
+            "inning": 9,
+            "halfInning": "bottom",
+            "endTime": "2026-04-07T01:36:51.708Z",
+            "isComplete": true
+          }
+        }
+      ]
+    }
+  }
+}

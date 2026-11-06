@@ -108,7 +108,7 @@ one-line edit.
 | Now playing | snapserver JSON-RPC on the hub (`Server.GetStatus`) | Stream playback state, metadata (title, artist, album, art URL when the sender provided one), and which clients are unmuted. This is the main seam with `snaphouse`. |
 | Now playing art for Bluetooth sources | MusicBrainz search by artist + album, then the Cover Art Archive | Bluetooth (the owner's Android) sends no art. No account. Results cached per album. Falls back to the text-only layout when nothing matches. Owner approved the lookup on 2026-11-06. |
 | Padres game | MLB Stats API: `statsapi.mlb.com/api/v1/schedule` to find today's game, `/api/v1.1/game/{gamePk}/feed/live` for state and plays | Public, no key. The same upstream the owner's `mlb-model` and `mlb-races` repos use; those repos' own datasets refresh daily, too stale for this. |
-| Team logos | `www.mlbstatic.com/team-logos/{teamId}.svg` | Fetched on first use and cached on the device, never committed. Reduced to the six colors at render time. |
+| Team logos | `midfield.mlbstatic.com/v1/team/{teamId}/spots/{size}` (PNG spot logos) | Fetched on first use and cached on the device, never committed. MLB serves a ready-made PNG, so no SVG rasterizer is needed. Reduced to the six colors at render time. |
 | Weather | Open-Meteo forecast API | No key or account. City-level coordinates in the untracked local config, not the repo. Needs hourly temperature, precipitation probability, UV index, and daily sunrise and sunset. |
 | Art | Folder synced from the hub's art share | See Art. |
 
@@ -206,4 +206,6 @@ happens anyway; it never forces a redraw during quiet hours. (My call.)
 ## Outbound calls
 
 Only the sources in the Data sources table, plus GitHub for updates and the Python package
-index for dependencies. This is a rule for the code, not an enforced firewall.
+index for dependencies. This is a rule for the code, not an enforced firewall. Team logos
+come from `midfield.mlbstatic.com` as PNG spot logos (`/v1/team/{teamId}/spots/{size}`),
+not the `www.mlbstatic.com` SVGs, so the device needs no SVG rasterizer.

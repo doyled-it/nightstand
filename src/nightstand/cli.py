@@ -11,20 +11,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from PIL import Image
 
 from nightstand import __version__
 from nightstand.art import ArtLibrary, load_piece_image
-from nightstand.config import load_config
+from nightstand.config import Config, load_config
 from nightstand.display import FileDisplay
-from nightstand.screens import art, now_playing, placeholder
-from nightstand.sources import snapserver
+from nightstand.screens import art, game, now_playing, placeholder
+from nightstand.sources import mlb, snapserver
 
 _EMPTY_ART_MESSAGE = "Add art to the share"
 _NOTHING_PLAYING_MESSAGE = "Nothing playing"
+_NO_GAME_MESSAGE = "No game today"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -79,12 +83,28 @@ def _add_preview(subparsers: argparse._SubParsersAction) -> None:
     )
     now_playing_screen.add_argument("-o", "--out", type=Path, required=True)
 
+    game_screen = screens.add_parser("game", help="the Padres game screen")
+    game_screen.add_argument(
+        "--fixture",
+        type=Path,
+        required=True,
+        help="a recorded MLB feed/live response",
+    )
+    game_screen.add_argument(
+        "--panel",
+        action="store_true",
+        help="simulate the muted panel look",
+    )
+    game_screen.add_argument("-o", "--out", type=Path, required=True)
+
 
 def _run_preview(args: argparse.Namespace) -> int:
     if args.screen == "art":
         return _preview_art(args)
     if args.screen == "now-playing":
         return _preview_now_playing(args)
+    if args.screen == "game":
+        return _preview_game(args)
     return 1
 
 
@@ -118,3 +138,60 @@ def _preview_now_playing(args: argparse.Namespace) -> int:
 
     FileDisplay(args.out, panel=args.panel).show(rendered)
     return 0
+
+
+def _preview_game(args: argparse.Namespace) -> int:
+    config = load_config()
+    feed = json.loads(args.fixture.read_text())
+    state = mlb.parse_game(feed)
+
+    if state is None:
+        rendered = placeholder.render(_NO_GAME_MESSAGE)
+    else:
+        # Fetch real logos for a realistic preview; a logo that cannot be
+        # fetched (offline, say) falls back to the team abbreviation.
+        logos_dir = _preview_cache_dir(config) / "logos"
+        with httpx.Client() as client:
+            cache = mlb.LogoCache(client, logos_dir)
+            away_logo = cache.for_team(state.away.id)
+            home_logo = cache.for_team(state.home.id)
+        rendered = game.render(state, away_logo, home_logo)
+
+    FileDisplay(args.out, panel=args.panel).show(rendered)
+    return 0
+
+
+def _preview_cache_dir(config: Config) -> Path:
+    """The cache dir for a preview: the configured one if writable, else a
+    per-user cache dir.
+
+    The service runs as a user that owns ``paths.cache`` (``/var/lib/nightstand``
+    by default). A preview on a dev machine has neither that directory nor root,
+    so when the configured cache cannot be written it falls back to a per-user
+    cache instead of failing when the logo cache tries to create it.
+    """
+    configured = config.paths.cache
+    if _is_writable_dir(configured):
+        return configured
+    return _user_cache_dir()
+
+
+def _is_writable_dir(path: Path) -> bool:
+    """Whether ``path`` exists-or-can-be-created and a file can be written in it."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write-test"
+        probe.touch()
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _user_cache_dir() -> Path:
+    """A per-user cache dir that needs no root, for previews on a dev machine."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "nightstand"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "nightstand"

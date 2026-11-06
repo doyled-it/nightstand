@@ -1,0 +1,63 @@
+{
+  "gamePk": 823401,
+  "gameData": {
+    "status": {
+      "abstractGameState": "Preview",
+      "detailedState": "Pre-Game"
+    },
+    "datetime": {
+      "dateTime": "2026-04-06T22:40:00Z"
+    },
+    "teams": {
+      "away": {
+        "id": 135,
+        "abbreviation": "SD"
+      },
+      "home": {
+        "id": 134,
+        "abbreviation": "PIT"
+      }
+    }
+  },
+  "liveData": {
+    "linescore": {
+      "currentInning": 1,
+      "inningState": "Top",
+      "teams": {
+        "away": {
+          "runs": 0
+        },
+        "home": {
+          "runs": 0
+        }
+      },
+      "innings": [
+        {
+          "num": 1,
+          "away": {
+            "runs": null
+          },
+          "home": {
+            "runs": null
+          }
+        }
+      ]
+    },
+    "plays": {
+      "scoringPlays": [],
+      "allPlays": [
+        {
+          "result": {
+            "description": "Status Change - Pre-Game"
+          },
+          "about": {
+            "inning": 1,
+            "halfInning": "top",
+            "endTime": "2026-04-06T20:04:32.596Z",
+            "isComplete": false
+          }
+        }
+      ]
+    }
+  }
+}
