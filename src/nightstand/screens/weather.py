@@ -59,7 +59,8 @@ def render(f: Forecast, now: datetime) -> Image.Image:
     draw_header(draw, f, uv_peak=False)
     draw_wear(draw, f, WEAR_TOP)
     draw_table(draw, f, TABLE_TOP, TABLE_BOTTOM, include_uv=True)
-    draw_sun_bar(draw, f, now, SUN_BAR_TOP)
+    if f.sunrise is not None and f.sunset is not None:
+        draw_sun_bar(draw, f, now, SUN_BAR_TOP)
 
     # Snap the anti-aliased text and bars so the panel sees six colors.
     return to_six_colors(canvas)
@@ -69,7 +70,9 @@ def draw_header(draw: ImageDraw.ImageDraw, f: Forecast, *, uv_peak: bool) -> Non
     """The big temperature, the description, and the high/low line.
 
     With ``uv_peak`` the day's peak UV is folded onto the high/low line (for the
-    split screen, which has no room for the UV table row), drawn red when high.
+    split screen, which has no room for the UV table row). A high peak is drawn
+    white on a red block, the same treatment the table gives a high UV cell. The
+    marker is skipped when there is no peak time to show.
     """
     draw.text(
         (MARGIN, TEMP_TOP),
@@ -91,16 +94,33 @@ def draw_header(draw: ImageDraw.ImageDraw, f: Forecast, *, uv_peak: bool) -> Non
     draw.text(
         (HEADER_TEXT_X, HILO_TOP), hilo, font=hilo_font, fill=PURE["black"], anchor="la"
     )
-    if uv_peak:
+    if uv_peak and f.uv_peak_time is not None:
         prefix_width = draw.textlength(hilo + "    ", font=hilo_font)
-        color = PURE["red"] if f.uv_peak >= UV_WARN else PURE["black"]
-        draw.text(
-            (HEADER_TEXT_X + prefix_width, HILO_TOP),
-            f"UV {f.uv_peak} at {_hour_label(f.uv_peak_time)}",
-            font=hilo_font,
-            fill=color,
-            anchor="la",
+        _draw_uv_marker(draw, f, hilo_font, HEADER_TEXT_X + prefix_width, HILO_TOP)
+
+
+def _draw_uv_marker(
+    draw: ImageDraw.ImageDraw,
+    f: Forecast,
+    marker_font,
+    x: float,
+    y: int,
+) -> None:
+    """The split header's UV peak: white on a red block when high, else black."""
+    text = f"UV {f.uv_peak} at {_hour_label(f.uv_peak_time)}"
+    if f.uv_peak >= UV_WARN:
+        text_width = draw.textlength(text, font=marker_font)
+        ascent, descent = marker_font.getmetrics()
+        pad_x, pad_y = 8, 3
+        bottom = y + ascent + descent + pad_y
+        draw.rectangle(
+            [x - pad_x, y - pad_y, x + text_width + pad_x, bottom],
+            fill=PURE["red"],
         )
+        fill = PURE["white"]
+    else:
+        fill = PURE["black"]
+    draw.text((x, y), text, font=marker_font, fill=fill, anchor="la")
 
 
 def draw_wear(draw: ImageDraw.ImageDraw, f: Forecast, top: int) -> None:
@@ -211,16 +231,29 @@ def draw_sun_bar(
     draw.rectangle([left, top, right, bottom], outline=PURE["black"], width=2)
 
 
+# Shown in a cell whose value the response omitted, never a misleading zero.
+_MISSING = "-"
+
+
 def _temp_cells(f: Forecast) -> list[tuple[str, bool]]:
     return [(f"{hour.temp}°", False) for hour in f.hours]
 
 
 def _rain_cells(f: Forecast) -> list[tuple[str, bool]]:
-    return [(f"{hour.rain_pct}%", False) for hour in f.hours]
+    return [
+        (f"{hour.rain_pct}%" if hour.rain_pct is not None else _MISSING, False)
+        for hour in f.hours
+    ]
 
 
 def _uv_cells(f: Forecast) -> list[tuple[str, bool]]:
-    return [(str(hour.uv), hour.uv >= UV_WARN) for hour in f.hours]
+    cells: list[tuple[str, bool]] = []
+    for hour in f.hours:
+        if hour.uv is None:
+            cells.append((_MISSING, False))
+        else:
+            cells.append((str(hour.uv), hour.uv >= UV_WARN))
+    return cells
 
 
 def _daylight_fraction(sunrise: datetime, sunset: datetime, now: datetime) -> float:

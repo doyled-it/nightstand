@@ -21,6 +21,46 @@ def load() -> dict:
     return json.loads((FIXTURES / "forecast.json").read_text())
 
 
+def _response(
+    *,
+    hours: list[dict],
+    current=42.6,
+    code=3,
+    high=45.5,
+    low=34.6,
+    sunrise="2026-11-06T06:29",
+    sunset="2026-11-06T16:38",
+) -> dict:
+    """A minimal Open-Meteo response shaped from inline hour specs.
+
+    Each hour spec is ``{"time", "temp", "rain", "uv"}``; any of ``temp``,
+    ``rain``, ``uv`` may be ``None`` to model a gap in the response.
+    """
+    return {
+        "current": {"temperature_2m": current, "weather_code": code},
+        "hourly": {
+            "time": [h["time"] for h in hours],
+            "temperature_2m": [h["temp"] for h in hours],
+            "precipitation_probability": [h["rain"] for h in hours],
+            "uv_index": [h["uv"] for h in hours],
+        },
+        "daily": {
+            "temperature_2m_max": [high],
+            "temperature_2m_min": [low],
+            "sunrise": [sunrise],
+            "sunset": [sunset],
+        },
+    }
+
+
+def _full_day(temp=60, rain=0, uv=1) -> list[dict]:
+    """Twenty-four hour specs for 2026-11-06, each with the same default values."""
+    return [
+        {"time": f"2026-11-06T{h:02d}:00", "temp": temp, "rain": rain, "uv": uv}
+        for h in range(24)
+    ]
+
+
 # --- fetch_forecast --------------------------------------------------------
 
 
@@ -101,6 +141,106 @@ def test_parse_forecast_on_the_hour_starts_at_that_hour():
     f = weather.parse_forecast(load(), now)
 
     assert [h.time.hour for h in f.hours] == [8, 10, 12, 14, 16]
+
+
+# --- parse_forecast: rain and the umbrella rule ----------------------------
+
+
+def test_parse_forecast_pins_rain_pct_per_hour():
+    hours = _full_day()
+    for hour, rain in {7: 10, 9: 30, 11: 55, 13: 20, 15: 0}.items():
+        hours[hour]["rain"] = rain
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    f = weather.parse_forecast(_response(hours=hours), now)
+
+    assert [h.rain_pct for h in f.hours] == [10, 30, 55, 20, 0]
+    # Any shown hour at 50 percent or more adds the umbrella.
+    assert weather.what_to_wear(f) == "Warm layers weather + umbrella"
+
+
+def test_parse_forecast_no_umbrella_when_rain_stays_below_fifty():
+    hours = _full_day(rain=49)
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    f = weather.parse_forecast(_response(hours=hours), now)
+
+    assert all(h.rain_pct == 49 for h in f.hours)
+    assert "umbrella" not in weather.what_to_wear(f)
+
+
+# --- parse_forecast: missing data ------------------------------------------
+
+
+def test_parse_forecast_returns_none_when_current_temp_missing():
+    response = _response(hours=_full_day(), current=None)
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    assert weather.parse_forecast(response, now) is None
+
+
+def test_parse_forecast_returns_none_when_high_or_low_missing():
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    no_high = _response(hours=_full_day(), high=None)
+    no_low = _response(hours=_full_day(), low=None)
+
+    assert weather.parse_forecast(no_high, now) is None
+    assert weather.parse_forecast(no_low, now) is None
+
+
+def test_parse_forecast_usable_when_only_sun_times_missing():
+    response = _response(hours=_full_day(), sunrise=None, sunset=None)
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    f = weather.parse_forecast(response, now)
+
+    assert f is not None
+    assert f.sunrise is None
+    assert f.sunset is None
+    # A usable forecast still has its temperatures.
+    assert f.now_temp == 43
+    assert f.high == 46
+    assert f.low == 35
+
+
+def test_parse_forecast_drops_hour_with_missing_temperature():
+    hours = _full_day()
+    hours[9]["temp"] = None  # the second shown step (09:00) has no temperature
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    f = weather.parse_forecast(_response(hours=hours), now)
+
+    # The 09:00 column is dropped rather than shown as a fake 0 degrees.
+    assert [h.time.hour for h in f.hours] == [7, 11, 13, 15]
+
+
+def test_parse_forecast_keeps_hour_but_dashes_missing_rain_and_uv():
+    hours = _full_day()
+    hours[7]["rain"] = None
+    hours[7]["uv"] = None
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    f = weather.parse_forecast(_response(hours=hours), now)
+
+    first = f.hours[0]
+    assert first.time.hour == 7
+    assert first.temp == 60  # temperature is present, so the hour stays
+    assert first.rain_pct is None  # missing values become None, never 0
+    assert first.uv is None
+
+
+def test_parse_forecast_uv_peak_time_none_when_no_uv_readings():
+    hours = [
+        {"time": h["time"], "temp": h["temp"], "rain": h["rain"], "uv": None}
+        for h in _full_day()
+    ]
+    now = datetime(2026, 11, 6, 6, 30, tzinfo=TZ)
+
+    f = weather.parse_forecast(_response(hours=hours), now)
+
+    assert f.uv_peak == 0
+    assert f.uv_peak_time is None
 
 
 # --- describe --------------------------------------------------------------

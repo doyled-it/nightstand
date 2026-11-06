@@ -30,6 +30,7 @@ from nightstand.sources import weather as weather_source
 _EMPTY_ART_MESSAGE = "Add art to the share"
 _NOTHING_PLAYING_MESSAGE = "Nothing playing"
 _NO_GAME_MESSAGE = "No game today"
+_NO_WEATHER_MESSAGE = "Weather unavailable"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -213,7 +214,10 @@ def _preview_weather(args: argparse.Namespace) -> int:
     at = datetime.fromisoformat(args.at) if args.at else datetime.now()
     forecast = weather_source.parse_forecast(data, at)
 
-    rendered = weather.render(forecast, at)
+    if forecast is None:
+        rendered = placeholder.render(_NO_WEATHER_MESSAGE)
+    else:
+        rendered = weather.render(forecast, at)
     FileDisplay(args.out, panel=args.panel).show(rendered)
     return 0
 
@@ -227,7 +231,9 @@ def _preview_split(args: argparse.Namespace) -> int:
     result = status.get("result", status)
     np = snapserver.parse_now_playing(result)
 
-    if np is None:
+    if forecast is None:
+        rendered = placeholder.render(_NO_WEATHER_MESSAGE)
+    elif np is None:
         # With nothing playing there is no strip to draw; the plain weather
         # screen is the right fallback for a split preview.
         rendered = weather.render(forecast, at)

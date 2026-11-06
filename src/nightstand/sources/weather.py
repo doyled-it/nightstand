@@ -64,21 +64,32 @@ _WMO: dict[int, str] = {
 
 @dataclass(frozen=True)
 class HourForecast:
-    """One hourly step in the table: the hour, temperature, rain chance, UV."""
+    """One hourly step in the table: the hour, temperature, rain chance, UV.
+
+    ``rain_pct`` and ``uv`` are ``None`` when the response omits them for that
+    hour; the table renders a dash rather than a misleading zero. An hour with no
+    temperature is dropped entirely, so ``temp`` is always present.
+    """
 
     time: datetime
     temp: int
-    rain_pct: int
-    uv: int
+    rain_pct: int | None
+    uv: int | None
 
 
 @dataclass(frozen=True)
 class Forecast:
     """The day's forecast as the screens draw it.
 
-    ``hours`` holds five steps starting at the next whole hour, every two hours.
-    ``uv_peak`` is the day's highest UV and ``uv_peak_time`` when it falls, which
-    the split screen folds into the header line.
+    ``hours`` holds up to five steps starting at the next whole hour, every two
+    hours. ``uv_peak`` is the day's highest UV and ``uv_peak_time`` when it falls,
+    which the split screen folds into the header line.
+
+    ``sunrise``, ``sunset``, and ``uv_peak_time`` are ``None`` when the response
+    omits them; the renderers skip the sun bar or the UV marker rather than draw
+    a placeholder. ``now_temp``, ``high``, and ``low`` are always present: a
+    response missing any of them is not a usable forecast, so ``parse_forecast``
+    returns ``None`` instead of inventing a value.
     """
 
     now_temp: int
@@ -86,10 +97,10 @@ class Forecast:
     high: int
     low: int
     hours: tuple[HourForecast, ...]
-    sunrise: datetime
-    sunset: datetime
+    sunrise: datetime | None
+    sunset: datetime | None
     uv_peak: int
-    uv_peak_time: datetime
+    uv_peak_time: datetime | None
 
 
 def fetch_forecast(
@@ -118,16 +129,28 @@ def fetch_forecast(
     return response.json()
 
 
-def parse_forecast(data: dict, now: datetime) -> Forecast:
-    """Reduce an Open-Meteo response to a ``Forecast`` as of ``now``.
+def parse_forecast(data: dict, now: datetime) -> Forecast | None:
+    """Reduce an Open-Meteo response to a ``Forecast`` as of ``now``, or ``None``.
 
     ``now`` is an aware datetime; its timezone is applied to the response's naive
     local times, so the zone comes from the caller, never the machine.
+
+    Returns ``None`` when the current temperature or the day's high or low is
+    missing, since a bedside frame should fall through to the next screen rather
+    than show a confident wrong forecast. Sunrise, sunset, and per-hour values may
+    still be missing on a usable forecast; those are carried as ``None`` and the
+    renderers skip them.
     """
     tz = now.tzinfo
     current = data.get("current", {})
     daily = data.get("daily", {})
     hourly = data.get("hourly", {})
+
+    now_temp = current.get("temperature_2m")
+    high = _first(daily.get("temperature_2m_max"))
+    low = _first(daily.get("temperature_2m_min"))
+    if now_temp is None or high is None or low is None:
+        return None
 
     times = [_aware(_parse_local(t), tz) for t in hourly.get("time", [])]
     temps = hourly.get("temperature_2m", [])
@@ -138,10 +161,10 @@ def parse_forecast(data: dict, now: datetime) -> Forecast:
     uv_peak, uv_peak_time = _peak_uv(times, uvs)
 
     return Forecast(
-        now_temp=round(current.get("temperature_2m") or 0),
+        now_temp=round(now_temp),
         description=describe(current.get("weather_code")),
-        high=round(_first(daily.get("temperature_2m_max")) or 0),
-        low=round(_first(daily.get("temperature_2m_min")) or 0),
+        high=round(high),
+        low=round(low),
         hours=hours,
         sunrise=_aware(_parse_local(_first(daily.get("sunrise"))), tz),
         sunset=_aware(_parse_local(_first(daily.get("sunset"))), tz),
@@ -179,7 +202,7 @@ def what_to_wear(f: Forecast) -> str:
         line = f"{now_bucket} now, {high_bucket} later"
     else:
         line = f"{now_bucket} weather"
-    if any(hour.rain_pct >= 50 for hour in f.hours):
+    if any(hour.rain_pct is not None and hour.rain_pct >= 50 for hour in f.hours):
         line += " + umbrella"
     return line
 
@@ -201,7 +224,12 @@ def _pick_hours(
     rains: list,
     uvs: list,
 ) -> tuple[HourForecast, ...]:
-    """Five steps from the next whole hour, every two hours, within the data."""
+    """Up to five steps from the next whole hour, every two hours.
+
+    An hour whose temperature is missing is dropped, since there is nothing to
+    anchor the column on. A missing rain chance or UV is carried as ``None`` so
+    the table can render a dash rather than a misleading zero.
+    """
     start = _next_whole_hour(now)
     first = next((i for i, t in enumerate(times) if t >= start), None)
     if first is None:
@@ -211,26 +239,37 @@ def _pick_hours(
         index = first + step * _HOUR_GAP
         if index >= len(times):
             break
+        temp = _at(temps, index)
+        if temp is None:
+            continue
         hours.append(
             HourForecast(
                 time=times[index],
-                temp=round(_at(temps, index) or 0),
-                rain_pct=round(_at(rains, index) or 0),
-                uv=round(_at(uvs, index) or 0),
+                temp=round(temp),
+                rain_pct=_round_or_none(_at(rains, index)),
+                uv=_round_or_none(_at(uvs, index)),
             )
         )
     return tuple(hours)
 
 
 def _peak_uv(times: list[datetime], uvs: list) -> tuple[int, datetime | None]:
-    """The day's highest UV, rounded, and the hour it falls on."""
-    best_value = 0.0
+    """The day's highest UV, rounded, and the hour it falls on.
+
+    Hours with no UV reading are skipped. With no readings at all the peak is 0
+    and its time is ``None``, which the split header treats as no marker.
+    """
+    best_value: float | None = None
     best_time: datetime | None = None
     for index, time in enumerate(times):
-        value = _at(uvs, index) or 0.0
-        if best_time is None or value > best_value:
+        value = _at(uvs, index)
+        if value is None:
+            continue
+        if best_value is None or value > best_value:
             best_value = value
             best_time = time
+    if best_value is None:
+        return 0, None
     return round(best_value), best_time
 
 
@@ -264,3 +303,9 @@ def _at(values: list, index: int):
     if 0 <= index < len(values):
         return values[index]
     return None
+
+
+def _round_or_none(value) -> int | None:
+    if value is None:
+        return None
+    return round(value)

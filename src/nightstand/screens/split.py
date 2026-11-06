@@ -43,6 +43,10 @@ TITLE_SIZE = 32
 ARTIST_SIZE = 28
 ROOMS_SIZE = 22
 
+# The title and artist never shrink below this, however long the room list is;
+# the rooms text is truncated with an ellipsis first to protect it.
+MIN_TEXT_WIDTH = 240
+
 
 def render(
     f: Forecast, np: NowPlaying, cover: Image.Image | None, now: datetime
@@ -83,11 +87,21 @@ def _draw_strip(
         )
 
     text_x = MARGIN + COVER_SIZE + COVER_GAP
-    rooms_text = " · ".join(np.rooms)
     rooms_font = font("bold", ROOMS_SIZE)
+
+    # Give the title and artist a guaranteed minimum width, then let the rooms
+    # take whatever is left, truncated with an ellipsis so a long room list never
+    # starves the track text.
+    max_rooms_width = WIDTH - MARGIN - text_x - MIN_TEXT_WIDTH - COVER_GAP
+    rooms_text = " · ".join(np.rooms)
+    if rooms_text and max_rooms_width > 0:
+        rooms_text = wrap(draw, rooms_text, rooms_font, int(max_rooms_width), 1)[0]
+    elif max_rooms_width <= 0:
+        rooms_text = ""
+
     rooms_width = draw.textlength(rooms_text, font=rooms_font) if rooms_text else 0
     right_limit = WIDTH - MARGIN - (rooms_width + COVER_GAP if rooms_text else 0)
-    max_width = int(right_limit - text_x)
+    max_width = max(MIN_TEXT_WIDTH, int(right_limit - text_x))
 
     title_font = font("bold", TITLE_SIZE)
     title = wrap(draw, np.title, title_font, max_width, 1)[0]
