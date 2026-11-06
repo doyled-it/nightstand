@@ -1,0 +1,61 @@
+# nightstand configuration.
+#
+# Every key below shows its built-in default. Copy this file to your local
+# config and change only what you need; omitted keys keep the defaults. The app
+# reads, in order: the path passed to load_config, then $NIGHTSTAND_CONFIG, then
+# /etc/nightstand/local.toml.
+#
+# Keep anything identifying (your real coordinates, in particular) in the local
+# config only. Never commit it. The placeholders here are deliberately generic.
+
+[hub]
+# The snaphouse hub that serves audio status and the art share.
+host = "zimablade.local"
+snapserver_port = 1780
+http_port = 80
+
+[location]
+# City-level coordinates for the weather forecast. Leave at 0.0 (weather off)
+# until you set your own in the untracked local config. timezone = "" means the
+# system local zone; otherwise an IANA name like "America/Los_Angeles".
+latitude = 0.0
+longitude = 0.0
+timezone = ""
+
+[schedule]
+# 24-hour "HH:MM" times. No redraws during quiet hours except a live game.
+quiet_start = "22:00"
+quiet_end = "06:00"
+# Morning weather window: [start, end].
+morning_weekday = ["06:00", "08:30"]
+morning_weekend = ["07:00", "09:00"]
+# Screen priority, highest first.
+priority = ["morning", "music", "game", "art"]
+# How often the loop re-evaluates the rules, in seconds.
+check_seconds = 60
+
+[art]
+# Local cache of the synced art collection, and how often art rotates.
+dir = "/var/lib/nightstand/art"
+rotate_minutes = 60
+
+[game]
+# MLB Stats API team id. 135 is the San Diego Padres.
+team_id = 135
+# How long the final score stays up after the game ends, in minutes.
+final_hold_minutes = 60
+
+[paths]
+# Device-local working directories.
+cache = "/var/lib/nightstand/cache"
+state = "/var/lib/nightstand/state"
+public = "/var/lib/nightstand/public"
+
+[health]
+# Status endpoints polled for the system-health marker.
+urls = [
+    "http://zimablade.local/status.json",
+    "http://pi-office.local/status.json",
+    "http://pi-bedroom.local/status.json",
+    "http://pi-bedroom.local/nightstand/status.json",
+]
