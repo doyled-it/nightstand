@@ -5,10 +5,11 @@ screens snap to the six pure panel colors, so a golden and a fresh render are
 discrete-color images; they match exactly on the same machine. Across machines
 they can differ by a handful of pixels along glyph edges, because FreeType
 anti-aliases text slightly differently on arm64 (a dev Mac) and x86_64 (CI)
-before the snap tips an edge pixel to the other side. So the comparison allows
-up to ``TOLERANCE`` of the pixels to differ rather than demanding an exact
-match, which keeps the goldens a reliable guard on layout and content while
-staying reproducible on any architecture.
+before the snap tips an edge pixel to the other side (measured at about 0.27%
+of pixels for these screens). So the comparison allows up to ``TOLERANCE`` of
+the pixels to differ rather than demanding an exact match, which keeps the
+goldens a reliable guard on layout and content while staying reproducible on
+any architecture.
 
 Set ``UPDATE_GOLDENS=1`` to write the golden instead of comparing, which is how
 goldens are (re)generated after a deliberate visual change. On a failure the
@@ -29,9 +30,10 @@ GOLDEN_DIR = Path(__file__).parent / "golden"
 OUT_DIR = GOLDEN_DIR / "_out"
 
 # At most this fraction of pixels may differ. 800x480 is 384000 pixels, so this
-# is about 768 pixels, far more than cross-architecture glyph-edge noise and far
-# less than any real layout or content change.
-TOLERANCE = 0.002
+# is about 1920 pixels. Measured arm64-vs-x86_64 glyph-edge noise is about 1000
+# pixels (0.27%) for these screens, so this clears it with margin while staying
+# far below any real layout or content change, which moves many thousands.
+TOLERANCE = 0.005
 
 
 @pytest.fixture

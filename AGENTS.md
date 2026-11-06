@@ -58,8 +58,9 @@ Golden image tests compare a render against a stored PNG via `assert_golden`
 (in `tests/conftest.py`). Renders snap to the six pure panel colors, so a
 golden and a fresh render match exactly on the same machine. Across machines
 they can differ by a few glyph-edge pixels, because FreeType anti-aliases text
-differently on arm64 (a dev Mac) and x86_64 (CI) before the snap, so the
-comparison tolerates up to 0.2% of pixels differing. Regenerate goldens on any
+differently on arm64 (a dev Mac) and x86_64 (CI) before the snap (measured at
+about 0.27% of pixels), so the comparison tolerates up to 0.5% of pixels
+differing. Regenerate goldens on any
 architecture with `UPDATE_GOLDENS=1 uv run pytest`, then open each PNG and check
 it before committing. Failures write the actual render and an amplified diff
 under the git-ignored `tests/golden/_out/`.
