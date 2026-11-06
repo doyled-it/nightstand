@@ -106,7 +106,7 @@ one-line edit.
 | Screen | Source | Notes |
 |---|---|---|
 | Now playing | snapserver JSON-RPC on the hub (`Server.GetStatus`) | Stream playback state, metadata (title, artist, album, art URL when the sender provided one), and which clients are unmuted. This is the main seam with `snaphouse`. |
-| Now playing art for Bluetooth sources | Lookup by artist + album, or text-only | Bluetooth (the owner's Android) sends no art. See open questions. |
+| Now playing art for Bluetooth sources | MusicBrainz search by artist + album, then the Cover Art Archive | Bluetooth (the owner's Android) sends no art. No account. Results cached per album. Falls back to the text-only layout when nothing matches. Owner approved the lookup on 2026-11-06. |
 | Padres game | MLB Stats API: `statsapi.mlb.com/api/v1/schedule` to find today's game, `/api/v1.1/game/{gamePk}/feed/live` for state and plays | Public, no key. The same upstream the owner's `mlb-model` and `mlb-races` repos use; those repos' own datasets refresh daily, too stale for this. |
 | Team logos | `www.mlbstatic.com/team-logos/{teamId}.svg` | Fetched on first use and cached on the device, never committed. Reduced to the six colors at render time. |
 | Weather | Open-Meteo forecast API | No key or account. City-level coordinates in config. Needs hourly temperature, precipitation probability, UV index, and daily sunrise and sunset. |
@@ -185,9 +185,15 @@ before any app work runs on the panel.
   third-party service.
 - Image caching and dithering cache strategy.
 
-## Open questions for the owner
+## System health marker
 
-- Album art for Bluetooth sources: look it up from an open music database (MusicBrainz
-  with the Cover Art Archive, no account) using artist and album, or stay text-only for
-  the Android source? A lookup tells that service what's being played, though with nothing
-  that identifies the household.
+`snaphouse` publishes each machine's update and health status (see its design, Self-update
+safety). When any machine, this app included, is running a fallback version or failing its
+checks, the frame shows a small marker in a corner on every screen. It's sized to notice
+up close, not to read from bed. The marker comes on or off with the next redraw that
+happens anyway; it never forces a redraw during quiet hours. (My call.)
+
+## Outbound calls
+
+Only the sources in the Data sources table, plus GitHub for updates and the Python package
+index for dependencies. This is a rule for the code, not an enforced firewall.
