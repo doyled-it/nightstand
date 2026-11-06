@@ -46,13 +46,6 @@ def render(np: NowPlaying, cover: Image.Image | None) -> Image.Image:
     """Render the now-playing screen at 800x480."""
     canvas = Image.new("RGB", (WIDTH, HEIGHT), PURE["white"])
     draw = ImageDraw.Draw(canvas)
-    # Draw text without anti-aliasing. The panel snaps to six colors, so grey
-    # edge pixels would snap to black or white anyway; rendering bilevel from the
-    # start keeps the text crisp and makes the render identical across CPU
-    # architectures (FreeType anti-aliases large glyphs differently on arm64 and
-    # x86_64), which the heavier text on this screen needs to stay within golden
-    # tolerance.
-    draw.fontmode = "1"
 
     if cover is not None:
         square = _square_crop(cover.convert("RGB"), COVER_SIZE)
