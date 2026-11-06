@@ -8,6 +8,7 @@ import httpx
 from PIL import Image
 
 from nightstand.models import NowPlaying
+from nightstand.sources import coverart
 from nightstand.sources.coverart import USER_AGENT, CoverArt
 
 MBID = "11111111-2222-3333-4444-555555555555"
@@ -179,6 +180,37 @@ def test_musicbrainz_gate_limits_to_one_request_per_second(tmp_path):
     assert server.count("musicbrainz.org") == 2
     # The second search waited out the one-per-second gate without real sleeping.
     assert clock.sleeps == [1.0]
+
+
+def test_art_url_with_non_http_scheme_is_refused(tmp_path):
+    server = FakeServer(art_bytes=_png_bytes())
+    np = NowPlaying(title="Tidal Drift", artist="Nova Reef", art_url="file:///etc/passwd")
+    with httpx.Client(transport=server.transport) as client:
+        result = CoverArt(client, tmp_path).for_track(np)
+
+    assert result is None
+    assert server.calls == []
+
+
+def test_oversized_download_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(coverart, "_MAX_BYTES", 10)
+    server = FakeServer(art_bytes=_png_bytes())
+    with httpx.Client(transport=server.transport) as client:
+        result = CoverArt(client, tmp_path).for_track(_airplay())
+
+    assert result is None
+    # The refused download left nothing cached.
+    assert list(tmp_path.glob("*")) == []
+
+
+def test_decompression_bomb_is_refused(tmp_path, monkeypatch):
+    # Lower Pillow's pixel ceiling so a tiny test image trips the bomb guard.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+    server = FakeServer(art_bytes=_png_bytes())
+    with httpx.Client(transport=server.transport) as client:
+        result = CoverArt(client, tmp_path).for_track(_airplay())
+
+    assert result is None
 
 
 def test_no_album_and_no_art_url_returns_none(tmp_path):

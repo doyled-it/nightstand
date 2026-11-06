@@ -21,6 +21,7 @@ import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -37,6 +38,9 @@ _MUSICBRAINZ_MIN_INTERVAL = 1.0  # seconds between MusicBrainz requests
 _MISS_TTL = 7 * 24 * 60 * 60  # a cached miss is honoured for seven days
 _NONE_SUFFIX = ".none"
 _TIMEOUT = 10.0
+# A cover is tiny; cap the download so a hostile or broken source cannot stream
+# an unbounded body into memory on the device.
+_MAX_BYTES = 10 * 1024 * 1024
 
 
 class CoverArt:
@@ -65,6 +69,11 @@ class CoverArt:
         return None
 
     def _from_url(self, url: str) -> Image.Image | None:
+        if urlparse(url).scheme.lower() not in ("http", "https"):
+            # art_url comes from the playback sender, so only fetch plain web
+            # URLs. This refuses file://, data:// and other schemes outright.
+            logger.warning("refusing non-http art URL")
+            return None
         path = self._cache_path(_sha1(url))
         cached = self._load_cached(path)
         if cached is not None:
@@ -131,19 +140,32 @@ class CoverArt:
             self._sleep(remaining)
 
     def _get(self, url: str, *, follow_redirects: bool = False) -> bytes | None:
+        """Download ``url``, stopping if the body exceeds ``_MAX_BYTES``."""
         try:
-            response = self._client.get(
+            with self._client.stream(
+                "GET",
                 url,
                 headers={"User-Agent": USER_AGENT},
                 follow_redirects=follow_redirects,
                 timeout=_TIMEOUT,
-            )
+            ) as response:
+                if response.status_code != 200:
+                    return None
+                if _declared_length(response) > _MAX_BYTES:
+                    logger.warning("cover at %s declares too large a body", url)
+                    return None
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_BYTES:
+                        logger.warning("cover at %s exceeded the size cap", url)
+                        return None
+                    chunks.append(chunk)
+                return b"".join(chunks)
         except httpx.HTTPError as error:
             logger.warning("cover fetch failed for %s: %s", url, error)
             return None
-        if response.status_code != 200:
-            return None
-        return response.content
 
     def _cache_path(self, digest: str) -> Path:
         return self._cache_dir / digest
@@ -169,13 +191,25 @@ def _sha1(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()
 
 
+def _declared_length(response: httpx.Response) -> int:
+    """The Content-Length header as an int, or 0 when absent or malformed."""
+    raw = response.headers.get("content-length")
+    if raw is None or not raw.isdigit():
+        return 0
+    return int(raw)
+
+
 def _decode(data: bytes | None) -> Image.Image | None:
-    """Load ``data`` as an image, or ``None`` if it is empty or not an image."""
+    """Load ``data`` as an image, or ``None`` if it is empty or not an image.
+
+    The bytes are untrusted, so any failure, including a Pillow decompression
+    bomb guard firing, resolves to ``None`` rather than raising into the caller.
+    """
     if not data:
         return None
     try:
         with Image.open(io.BytesIO(data)) as image:
             image.load()
             return image.copy()
-    except (OSError, UnidentifiedImageError):
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
         return None
