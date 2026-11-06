@@ -94,7 +94,7 @@ one-line edit.
 - Copyrighted artwork, team logos, or other third-party images committed to the public
   repo. Logos are fetched from MLB's CDN and cached on the device. Art lives on the hub.
 - Personal or identifying information in the repo or in outbound requests. Weather is
-  queried with city-level coordinates for San Diego, never the home's location. No API
+  queried with city-level coordinates kept in the untracked local config, never the home's location. No API
   keys or accounts are needed for anything in this version.
 - Refreshing so often that the frame is a constant flicker in a lit room.
 - A display that freezes silently on stale content. If a data source fails, the screen
@@ -109,7 +109,7 @@ one-line edit.
 | Now playing art for Bluetooth sources | MusicBrainz search by artist + album, then the Cover Art Archive | Bluetooth (the owner's Android) sends no art. No account. Results cached per album. Falls back to the text-only layout when nothing matches. Owner approved the lookup on 2026-11-06. |
 | Padres game | MLB Stats API: `statsapi.mlb.com/api/v1/schedule` to find today's game, `/api/v1.1/game/{gamePk}/feed/live` for state and plays | Public, no key. The same upstream the owner's `mlb-model` and `mlb-races` repos use; those repos' own datasets refresh daily, too stale for this. |
 | Team logos | `www.mlbstatic.com/team-logos/{teamId}.svg` | Fetched on first use and cached on the device, never committed. Reduced to the six colors at render time. |
-| Weather | Open-Meteo forecast API | No key or account. City-level coordinates in config. Needs hourly temperature, precipitation probability, UV index, and daily sunrise and sunset. |
+| Weather | Open-Meteo forecast API | No key or account. City-level coordinates in the untracked local config, not the repo. Needs hourly temperature, precipitation probability, UV index, and daily sunrise and sunset. |
 | Art | Folder synced from the hub's art share | See Art. |
 
 ## Art
