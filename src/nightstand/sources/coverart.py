@@ -16,6 +16,7 @@ its public repository URL and carries nothing personal.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import io
 import logging
 import time
@@ -30,7 +31,13 @@ from nightstand.models import NowPlaying
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "nightstand/0.1 (https://github.com/doyled-it/nightstand)"
+# MusicBrainz asks callers to identify themselves. The version comes from the
+# installed package metadata so it tracks the release, and the contact is the
+# public repo URL, with nothing personal.
+USER_AGENT = (
+    f"nightstand/{importlib.metadata.version('nightstand')} "
+    "( https://github.com/doyled-it/nightstand )"
+)
 
 _MUSICBRAINZ_SEARCH = "https://musicbrainz.org/ws/2/release/"
 _COVER_ART_ARCHIVE = "https://coverartarchive.org/release/{mbid}/front-500"
@@ -44,6 +51,15 @@ _TIMEOUT = 10.0
 # outsized image by its declared dimensions before it is decoded.
 _MAX_BYTES = 10 * 1024 * 1024
 _MAX_PIXELS = 4096 * 4096
+
+
+class _TransientLookupError(Exception):
+    """A lookup request failed in a way that should be retried later.
+
+    Raised for transport errors, timeouts, 5xx responses, and unparseable
+    bodies. The caller returns ``None`` without caching a miss, so a passing
+    network blip does not suppress an album's art for the whole miss window.
+    """
 
 
 class CoverArt:
@@ -81,7 +97,11 @@ class CoverArt:
         cached = self._load_cached(path)
         if cached is not None:
             return cached
-        data = self._get(url)
+        try:
+            data = self._get(url)
+        except _TransientLookupError as error:
+            logger.warning("art URL fetch failed: %s", error)
+            return None
         image = _decode(data)
         if image is None:
             return None
@@ -97,20 +117,32 @@ class CoverArt:
         if self._marker_fresh(marker):
             return None
 
-        mbid = self._search_release(artist, album)
-        data = None
-        if mbid is not None:
-            url = _COVER_ART_ARCHIVE.format(mbid=mbid)
-            data = self._get(url, follow_redirects=True)
-        image = _decode(data)
+        try:
+            mbid = self._search_release(artist, album)
+            data = None
+            if mbid is not None:
+                url = _COVER_ART_ARCHIVE.format(mbid=mbid)
+                data = self._get(url, follow_redirects=True)
+        except _TransientLookupError as error:
+            # The lookup itself failed; retry next time rather than cache a miss.
+            logger.warning("cover lookup failed: %s", error)
+            return None
+
+        image = _decode(data) if data is not None else None
         if image is None:
+            # A genuine miss: MusicBrainz has no such release, or the archive has
+            # no usable cover for it. Suppress the lookup for the miss window.
             self._write(marker, b"")
             return None
         self._write(path, data)
         return image
 
     def _search_release(self, artist: str, album: str) -> str | None:
-        """The MusicBrainz release id for ``artist``/``album``, or ``None``."""
+        """The MusicBrainz release id, or ``None`` when no release was found.
+
+        Raises ``_TransientLookupError`` when the request itself failed, so a
+        failure is never mistaken for a genuine "no release" result.
+        """
         self._await_musicbrainz_gate()
         try:
             response = self._client.get(
@@ -124,14 +156,25 @@ class CoverArt:
                 timeout=_TIMEOUT,
             )
         except httpx.HTTPError as error:
-            logger.warning("MusicBrainz search failed: %s", error)
-            return None
+            raise _TransientLookupError(
+                f"MusicBrainz request failed: {error}"
+            ) from error
         finally:
             self._last_musicbrainz = self._clock()
         if response.status_code != 200:
+            raise _TransientLookupError(
+                f"MusicBrainz returned {response.status_code}"
+            )
+        try:
+            releases = response.json().get("releases", [])
+        except (ValueError, AttributeError) as error:
+            raise _TransientLookupError(
+                f"MusicBrainz body unparseable: {error}"
+            ) from error
+        if not isinstance(releases, list) or not releases:
             return None
-        releases = response.json().get("releases", [])
-        return releases[0].get("id") if releases else None
+        first = releases[0]
+        return first.get("id") if isinstance(first, dict) else None
 
     def _await_musicbrainz_gate(self) -> None:
         """Wait, if needed, so MusicBrainz is called at most once per second."""
@@ -143,7 +186,12 @@ class CoverArt:
             self._sleep(remaining)
 
     def _get(self, url: str, *, follow_redirects: bool = False) -> bytes | None:
-        """Download ``url``, stopping if the body exceeds ``_MAX_BYTES``."""
+        """Download ``url``, capping the body at ``_MAX_BYTES``.
+
+        Returns the body on a 200, ``None`` on a 404 (the resource is
+        definitively absent), and raises ``_TransientLookupError`` on any other
+        failure so the caller can retry rather than cache a miss.
+        """
         try:
             with self._client.stream(
                 "GET",
@@ -154,23 +202,24 @@ class CoverArt:
                 follow_redirects=follow_redirects,
                 timeout=_TIMEOUT,
             ) as response:
+                if response.status_code == 404:
+                    return None
                 if response.status_code != 200:
-                    return None
+                    raise _TransientLookupError(
+                        f"{url} returned {response.status_code}"
+                    )
                 if _declared_length(response) > _MAX_BYTES:
-                    logger.warning("cover at %s declares too large a body", url)
-                    return None
+                    raise _TransientLookupError(f"{url} declares too large a body")
                 chunks: list[bytes] = []
                 total = 0
                 for chunk in response.iter_bytes():
                     total += len(chunk)
                     if total > _MAX_BYTES:
-                        logger.warning("cover at %s exceeded the size cap", url)
-                        return None
+                        raise _TransientLookupError(f"{url} exceeded the size cap")
                     chunks.append(chunk)
                 return b"".join(chunks)
         except httpx.HTTPError as error:
-            logger.warning("cover fetch failed for %s: %s", url, error)
-            return None
+            raise _TransientLookupError(f"fetch failed for {url}: {error}") from error
 
     def _cache_path(self, digest: str) -> Path:
         return self._cache_dir / digest

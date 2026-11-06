@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import io
 import os
 import time
@@ -169,6 +170,83 @@ def test_user_agent_is_exact_and_has_no_at_sign(tmp_path):
     assert server.user_agents, "expected at least one outbound request"
     assert all(ua == USER_AGENT for ua in server.user_agents)
     assert "@" not in USER_AGENT
+
+
+def test_user_agent_matches_the_package_version(tmp_path):
+    version = importlib.metadata.version("nightstand")
+    assert USER_AGENT == (
+        f"nightstand/{version} ( https://github.com/doyled-it/nightstand )"
+    )
+
+
+def test_malformed_200_body_returns_none_and_caches_no_miss(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "musicbrainz.org"
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    clock = FakeClock()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        art = CoverArt(client, tmp_path, clock=clock.now, sleep=clock.sleep)
+        result = art.for_track(_bluetooth())
+
+    assert result is None
+    # A broken body is a failure, not a genuine miss, so nothing is cached.
+    assert list(tmp_path.glob("*.none")) == []
+
+
+def test_valid_json_missing_release_keys_returns_none(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "musicbrainz.org"
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    clock = FakeClock()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        art = CoverArt(client, tmp_path, clock=clock.now, sleep=clock.sleep)
+        result = art.for_track(_bluetooth())
+
+    assert result is None
+
+
+def test_transport_error_leaves_no_miss_then_a_later_call_fetches(tmp_path):
+    state = {"fail": True}
+    cover = _png_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if host == "musicbrainz.org":
+            if state["fail"]:
+                raise httpx.ConnectError("boom")
+            return httpx.Response(200, json={"releases": [{"id": MBID}]})
+        if host == "coverartarchive.org":
+            return httpx.Response(
+                200, content=cover, headers={"content-type": "image/png"}
+            )
+        raise AssertionError(f"unexpected host {host}")
+
+    clock = FakeClock()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        art = CoverArt(client, tmp_path, clock=clock.now, sleep=clock.sleep)
+        first = art.for_track(_bluetooth())
+        assert first is None
+        assert list(tmp_path.glob("*.none")) == []
+        state["fail"] = False
+        second = art.for_track(_bluetooth())
+
+    assert isinstance(second, Image.Image)
+
+
+def test_server_error_leaves_no_miss_marker(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "musicbrainz.org"
+        return httpx.Response(503)
+
+    clock = FakeClock()
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        art = CoverArt(client, tmp_path, clock=clock.now, sleep=clock.sleep)
+        result = art.for_track(_bluetooth())
+
+    assert result is None
+    assert list(tmp_path.glob("*.none")) == []
 
 
 def test_musicbrainz_gate_limits_to_one_request_per_second(tmp_path):
