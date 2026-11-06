@@ -1,0 +1,65 @@
+{
+  "copyright": "Copyright 2026 MLB Advanced Media, L.P. Use of any content on this page acknowledges agreement to the terms posted here http://gdx.mlb.com/components/copyright.txt",
+  "totalItems": 2,
+  "totalGames": 2,
+  "dates": [
+    {
+      "date": "2026-07-18",
+      "totalGames": 2,
+      "games": [
+        {
+          "gamePk": 779001,
+          "gameDate": "2026-07-18T17:10:00Z",
+          "gameType": "R",
+          "status": {
+            "abstractGameState": "Final",
+            "codedGameState": "F",
+            "detailedState": "Final",
+            "statusCode": "F",
+            "abstractGameCode": "F"
+          },
+          "teams": {
+            "away": {
+              "team": {"id": 135, "name": "San Diego Padres"},
+              "score": 3,
+              "isWinner": false
+            },
+            "home": {
+              "team": {"id": 119, "name": "Los Angeles Dodgers"},
+              "score": 4,
+              "isWinner": true
+            }
+          },
+          "doubleHeader": "S",
+          "gameNumber": 1
+        },
+        {
+          "gamePk": 779002,
+          "gameDate": "2026-07-18T23:40:00Z",
+          "gameType": "R",
+          "status": {
+            "abstractGameState": "Live",
+            "codedGameState": "I",
+            "detailedState": "In Progress",
+            "statusCode": "I",
+            "abstractGameCode": "L"
+          },
+          "teams": {
+            "away": {
+              "team": {"id": 135, "name": "San Diego Padres"},
+              "score": 2,
+              "isWinner": false
+            },
+            "home": {
+              "team": {"id": 119, "name": "Los Angeles Dodgers"},
+              "score": 1,
+              "isWinner": false
+            }
+          },
+          "doubleHeader": "S",
+          "gameNumber": 2
+        }
+      ]
+    }
+  ]
+}

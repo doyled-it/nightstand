@@ -1,0 +1,39 @@
+{
+  "copyright": "Copyright 2026 MLB Advanced Media, L.P. Use of any content on this page acknowledges agreement to the terms posted here http://gdx.mlb.com/components/copyright.txt",
+  "totalItems": 1,
+  "totalGames": 1,
+  "dates": [
+    {
+      "date": "2026-05-02",
+      "totalGames": 1,
+      "games": [
+        {
+          "gamePk": 779100,
+          "gameDate": "2026-05-02T01:40:00Z",
+          "gameType": "R",
+          "status": {
+            "abstractGameState": "Preview",
+            "codedGameState": "D",
+            "detailedState": "Postponed",
+            "statusCode": "DR",
+            "abstractGameCode": "P"
+          },
+          "teams": {
+            "away": {
+              "team": {"id": 135, "name": "San Diego Padres"},
+              "score": null,
+              "isWinner": false
+            },
+            "home": {
+              "team": {"id": 158, "name": "Milwaukee Brewers"},
+              "score": null,
+              "isWinner": false
+            }
+          },
+          "doubleHeader": "N",
+          "gameNumber": 1
+        }
+      ]
+    }
+  ]
+}

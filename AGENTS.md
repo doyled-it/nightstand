@@ -31,14 +31,35 @@ src/nightstand/
   palette.py    the six-color palette (PURE, PANEL) and conversions
   text.py       font() loader and wrap() word wrapping
   cli.py        console entry point
+  screens/      one module per screen (art, now_playing, game, ...)
+  sources/      one module per data source (snapserver, coverart, mlb, ...)
   fonts/        bundled Inter TTFs and their license (OFL.txt)
+scripts/        developer tools (record_mlb_fixtures.py records game fixtures)
 tests/          pytest tests, one module per source module
 config.example.toml   every config key with its default and placeholders
 ```
 
+Recorded fixtures are real upstream responses. The MLB game fixtures under
+`tests/fixtures/mlb/` are trimmed to the keys the parser reads (see
+`scripts/record_mlb_fixtures.py`), since the full feed is hundreds of KB.
+
 Local config overlays the defaults. The app reads an explicit path, then
 `$NIGHTSTAND_CONFIG`, then `/etc/nightstand/local.toml`. Real coordinates and
 anything identifying live in the untracked local config, never in the repo.
+
+## External hosts (allowlist)
+
+nightstand reaches only these hosts, all keyless public APIs or the LAN hub.
+Keep this list current when a data source is added, and send nothing
+identifying in any request (no name, email, address, or home location).
+
+- `zimablade.local` (the hub): snapserver JSON-RPC and the art share, on the LAN.
+- `musicbrainz.org`, `coverartarchive.org`: album cover lookup for now playing.
+- `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
+- `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot
+  logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.
+  Logos are fetched on first use and cached under `paths.cache/logos/`, never
+  committed.
 
 ## The six-color rule
 
