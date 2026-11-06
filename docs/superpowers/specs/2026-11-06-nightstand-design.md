@@ -12,8 +12,8 @@ weather while getting dressed. It should look like a framed print, not a gadget,
 readable from bed.
 
 The hardware is a Pimoroni Inky Impression 7.3" (2025, Spectra 6), with 800x480 pixels in
-six colors (black, white, red, yellow, green, blue). It sits in an IKEA RÖDALM 8x10" frame
-mounted landscape, driven by `pi-bedroom`, a Raspberry Pi 5 (1 GB) attached to the back
+six colors (black, white, red, yellow, green, blue). It sits in a 5x7" frame (ideally a
+shadow box about 1" deep) mounted landscape, driven by `pi-bedroom`, a Raspberry Pi 5 (1 GB) attached to the back
 of the panel. The same Pi plays house audio to the bedroom JBL. That part belongs to
 `snaphouse`.
 
@@ -152,14 +152,24 @@ one-line edit.
   on the Pi: enabling SPI and I2C, the `inky` library, its service, its updater, and its
   art sync. One bootstrap per device, with clear ownership afterward. That's my call.
 
-## Hardware assembly (from the handoff)
+## Hardware assembly
 
-Mount the Pi to the Inky with its standoffs. Cut the RÖDALM mat to the panel's active area
-(about 160x97 mm). Mount the frame sideways (landscape), since the board is 174x123 mm and
-the frame is portrait. Seat behind the glass. Run the right-angle USB-C cable out the back,
-and leave the backing slightly open if it bulges; the assembly is 25 to 30 mm deep and the
-frame is 30 mm. Then install Pimoroni's drivers, enable SPI and I2C, and push a test image
-before any app work runs on the panel.
+The IKEA RÖDALM 8x10" frame from the handoff turned out too large. The owner is buying a
+5x7" frame instead (decided 2026-11-06), chosen to sit as close to the viewing area as a
+standard size allows.
+
+- Board: 174x123 mm. Viewing area: 160x96 mm. A 5x7" frame's interior is 178x127 mm, so the
+  whole board fits with about 2 mm of play per side. The visible opening behind the lip is
+  roughly 166x115 mm.
+- Mat: black mat board or heavy cardstock cut to fill the frame interior, with a window of
+  158x94 mm (1 mm inside the viewing area on each edge, to hide the panel's inactive edge).
+  The viewing area is not centered on the board, so the window is cut at offsets measured
+  from the owner's board, not at the mat's center.
+- Mount the Pi to the Inky with its standoffs. Seat the mat, then the board, behind the
+  glass. The back of the frame does not need to close; the owner will secure the assembly
+  behind it. Run the right-angle USB-C cable out the back.
+- Then install Pimoroni's drivers, enable SPI and I2C, and push a test image before any app
+  work runs on the panel.
 
 ## Build order
 
