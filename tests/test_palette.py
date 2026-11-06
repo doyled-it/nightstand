@@ -32,6 +32,13 @@ def test_to_six_colors_outputs_only_pure_colors_without_dither():
     assert _colors(to_six_colors(flat)) == {PURE["white"]}
 
 
+def test_dither_actually_dithers():
+    # Error diffusion must change the pixel layout versus a plain nearest-color
+    # snap; otherwise no dithering happened.
+    img = Image.linear_gradient("L").convert("RGB").resize((800, 480))
+    assert dither_to_panel(img).tobytes() != to_six_colors(img).tobytes()
+
+
 def test_simulate_panel_maps_pure_to_panel():
     src = Image.new("RGB", (32, 32), PURE["red"])
     assert _colors(simulate_panel(src)) == {PANEL["red"]}

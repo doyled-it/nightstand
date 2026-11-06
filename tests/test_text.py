@@ -28,3 +28,10 @@ def test_wrap_fits_within_max_width():
     f = font("regular", 40)
     lines = wrap(draw, "the quick brown fox jumps over", f, 300, 5)
     assert all(draw.textlength(line, font=f) <= 300 for line in lines)
+
+
+def test_wrap_ellipsizes_overlong_single_word():
+    draw = _draw()
+    f = font("bold", 64)
+    lines = wrap(draw, "x" * 200, f, 300, 3)
+    assert all(draw.textlength(line, font=f) <= 300 for line in lines)

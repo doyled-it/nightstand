@@ -67,10 +67,23 @@ def wrap(
         lines.append(" ".join(current))
 
     if overflowed or len(lines) > max_lines:
-        kept = lines[: max_lines - 1]
-        kept.append(_ellipsize(draw, lines[max_lines - 1], font, max_width))
-        return kept
-    return lines
+        lines = lines[:max_lines]
+        lines[-1] = _ellipsize(draw, lines[-1], font, max_width)
+
+    # A line can still overrun the box when a single word is wider than
+    # max_width and cannot be broken; ellipsize anything that still does not fit.
+    return [_fit(draw, line, font, max_width) for line in lines]
+
+
+def _fit(
+    draw: ImageDraw.ImageDraw,
+    line: str,
+    font: ImageFont.FreeTypeFont,
+    max_width: int,
+) -> str:
+    if draw.textlength(line, font=font) <= max_width:
+        return line
+    return _ellipsize(draw, line, font, max_width)
 
 
 def _ellipsize(

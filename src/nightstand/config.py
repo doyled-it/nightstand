@@ -87,10 +87,28 @@ def load_config(path: Path | None = None) -> Config:
     """Return a Config: package defaults overlaid with a local TOML file."""
     config = Config()
     source = _resolve_source(path)
-    if source is None or not source.exists():
-        return config
-    data = tomllib.loads(source.read_text())
-    return _overlay(config, data)
+    if source is not None and source.exists():
+        config = _overlay(config, tomllib.loads(source.read_text()))
+    return _normalize(config)
+
+
+def _normalize(config: Config) -> Config:
+    """Treat placeholder location values as 'unset'.
+
+    config.example.toml ships visible placeholders rather than empty fields, so
+    translate them to the sentinels the app expects: 0.0/0.0 coordinates mean
+    weather is disabled, an empty timezone means the system local zone.
+    """
+    location = config.location
+    changes = {}
+    if location.latitude == 0.0 and location.longitude == 0.0:
+        changes["latitude"] = None
+        changes["longitude"] = None
+    if location.timezone == "":
+        changes["timezone"] = None
+    if changes:
+        return replace(config, location=replace(location, **changes))
+    return config
 
 
 def _resolve_source(path: Path | None) -> Path | None:

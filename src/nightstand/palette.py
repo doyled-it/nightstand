@@ -41,25 +41,21 @@ PANEL: dict[str, RGB] = {
 }
 
 
-def _palette_image(colors: list[RGB]) -> Image.Image:
-    """A P-mode image whose palette is ``colors``, padded by repeating the first."""
-    flat: list[int] = []
-    for rgb in colors:
-        flat.extend(rgb)
-    first = colors[0]
-    flat.extend(list(first) * (256 - len(colors)))
-    palette = Image.new("P", (1, 1))
-    palette.putpalette(flat)
-    return palette
-
-
 def _flat(colors: list[RGB]) -> list[int]:
+    """A flat 256-entry RGB palette list, padded by repeating the first color."""
     flat: list[int] = []
     for rgb in colors:
         flat.extend(rgb)
     first = colors[0]
     flat.extend(list(first) * (256 - len(colors)))
     return flat
+
+
+def _palette_image(colors: list[RGB]) -> Image.Image:
+    """A P-mode image whose palette is ``colors``, padded by repeating the first."""
+    palette = Image.new("P", (1, 1))
+    palette.putpalette(_flat(colors))
+    return palette
 
 
 def to_six_colors(img: Image.Image) -> Image.Image:

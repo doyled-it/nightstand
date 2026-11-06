@@ -32,3 +32,14 @@ def test_env_var_is_read(tmp_path, monkeypatch):
     p.write_text('[hub]\nhost = "other.local"\n')
     monkeypatch.setenv("NIGHTSTAND_CONFIG", str(p))
     assert load_config().hub.host == "other.local"
+
+
+def test_example_config_disables_optional_location_fields():
+    # config.example.toml ships 0.0 coordinates and an empty timezone as visible
+    # placeholders; load_config normalizes those to None (weather disabled,
+    # system local zone).
+    example = Path(__file__).resolve().parents[1] / "config.example.toml"
+    c = load_config(example)
+    assert c.location.latitude is None
+    assert c.location.longitude is None
+    assert c.location.timezone is None
