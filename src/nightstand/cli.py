@@ -23,12 +23,14 @@ from nightstand import __version__
 from nightstand.art import ArtLibrary, load_piece_image
 from nightstand.config import Config, load_config
 from nightstand.display import FileDisplay
-from nightstand.screens import art, game, now_playing, placeholder
+from nightstand.screens import art, game, now_playing, placeholder, split, weather
 from nightstand.sources import mlb, snapserver
+from nightstand.sources import weather as weather_source
 
 _EMPTY_ART_MESSAGE = "Add art to the share"
 _NOTHING_PLAYING_MESSAGE = "Nothing playing"
 _NO_GAME_MESSAGE = "No game today"
+_NO_WEATHER_MESSAGE = "Weather unavailable"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,6 +99,48 @@ def _add_preview(subparsers: argparse._SubParsersAction) -> None:
     )
     game_screen.add_argument("-o", "--out", type=Path, required=True)
 
+    weather_screen = screens.add_parser("weather", help="the weather screen")
+    weather_screen.add_argument(
+        "--fixture",
+        type=Path,
+        required=True,
+        help="a recorded Open-Meteo forecast response",
+    )
+    weather_screen.add_argument(
+        "--at", help="ISO timestamp to render for (default now)"
+    )
+    weather_screen.add_argument(
+        "--panel",
+        action="store_true",
+        help="simulate the muted panel look",
+    )
+    weather_screen.add_argument("-o", "--out", type=Path, required=True)
+
+    split_screen = screens.add_parser("split", help="the weather and now-playing split")
+    split_screen.add_argument(
+        "--fixture",
+        type=Path,
+        required=True,
+        help="a recorded Open-Meteo forecast response",
+    )
+    split_screen.add_argument(
+        "--now-playing",
+        type=Path,
+        required=True,
+        dest="now_playing",
+        help="a recorded snapserver Server.GetStatus response",
+    )
+    split_screen.add_argument(
+        "--cover", type=Path, help="a local image to use as the cover art"
+    )
+    split_screen.add_argument("--at", help="ISO timestamp to render for (default now)")
+    split_screen.add_argument(
+        "--panel",
+        action="store_true",
+        help="simulate the muted panel look",
+    )
+    split_screen.add_argument("-o", "--out", type=Path, required=True)
+
 
 def _run_preview(args: argparse.Namespace) -> int:
     if args.screen == "art":
@@ -105,6 +149,10 @@ def _run_preview(args: argparse.Namespace) -> int:
         return _preview_now_playing(args)
     if args.screen == "game":
         return _preview_game(args)
+    if args.screen == "weather":
+        return _preview_weather(args)
+    if args.screen == "split":
+        return _preview_split(args)
     return 1
 
 
@@ -156,6 +204,42 @@ def _preview_game(args: argparse.Namespace) -> int:
             away_logo = cache.for_team(state.away.id)
             home_logo = cache.for_team(state.home.id)
         rendered = game.render(state, away_logo, home_logo)
+
+    FileDisplay(args.out, panel=args.panel).show(rendered)
+    return 0
+
+
+def _preview_weather(args: argparse.Namespace) -> int:
+    data = json.loads(args.fixture.read_text())
+    at = datetime.fromisoformat(args.at) if args.at else datetime.now()
+    forecast = weather_source.parse_forecast(data, at)
+
+    if forecast is None:
+        rendered = placeholder.render(_NO_WEATHER_MESSAGE)
+    else:
+        rendered = weather.render(forecast, at)
+    FileDisplay(args.out, panel=args.panel).show(rendered)
+    return 0
+
+
+def _preview_split(args: argparse.Namespace) -> int:
+    data = json.loads(args.fixture.read_text())
+    at = datetime.fromisoformat(args.at) if args.at else datetime.now()
+    forecast = weather_source.parse_forecast(data, at)
+
+    status = json.loads(args.now_playing.read_text())
+    result = status.get("result", status)
+    np = snapserver.parse_now_playing(result)
+
+    if forecast is None:
+        rendered = placeholder.render(_NO_WEATHER_MESSAGE)
+    elif np is None:
+        # With nothing playing there is no strip to draw; the plain weather
+        # screen is the right fallback for a split preview.
+        rendered = weather.render(forecast, at)
+    else:
+        cover = Image.open(args.cover) if args.cover else None
+        rendered = split.render(forecast, np, cover, at)
 
     FileDisplay(args.out, panel=args.panel).show(rendered)
     return 0

@@ -60,6 +60,10 @@ identifying in any request (no name, email, address, or home location).
   logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.
   Logos are fetched on first use and cached under `paths.cache/logos/`, never
   committed.
+- `api.open-meteo.com`: the Open-Meteo forecast API, for the morning weather. No
+  key or account. Only city-level coordinates from the untracked local config go
+  in the request, never the household's real location. The recorded fixture has
+  its latitude, longitude, elevation, and timezone fields stripped.
 
 ## The six-color rule
 

@@ -10,8 +10,14 @@ from nightstand.screens import placeholder
 
 FIXTURES = Path(__file__).parent / "fixtures" / "snapserver"
 MLB_FIXTURES = Path(__file__).parent / "fixtures" / "mlb"
+OPENMETEO_FIXTURES = Path(__file__).parent / "fixtures" / "openmeteo"
 _EMPTY_ART_MESSAGE = "Add art to the share"
 _NO_GAME_MESSAGE = "No game today"
+
+
+def _only_panel_colors(rendered: Image.Image) -> bool:
+    colors = rendered.getcolors(maxcolors=256)
+    return colors is not None and {color for _, color in colors} <= set(PURE.values())
 
 
 def _identical(a: Image.Image, b: Image.Image) -> bool:
@@ -103,6 +109,52 @@ def test_preview_game_renders_from_fixture(tmp_path, monkeypatch):
     colors = rendered.getcolors(maxcolors=256)
     assert colors is not None
     assert {color for _, color in colors} <= set(PURE.values())
+
+
+def test_preview_weather_renders_from_fixture(tmp_path):
+    out = tmp_path / "weather.png"
+
+    code = main(
+        [
+            "preview",
+            "weather",
+            "--fixture",
+            str(OPENMETEO_FIXTURES / "forecast.json"),
+            "--at",
+            "2026-11-06T06:30",
+            "-o",
+            str(out),
+        ]
+    )
+
+    assert code == 0
+    rendered = Image.open(out).convert("RGB")
+    assert rendered.size == (800, 480)
+    assert _only_panel_colors(rendered)
+
+
+def test_preview_split_renders_from_fixtures(tmp_path):
+    out = tmp_path / "split.png"
+
+    code = main(
+        [
+            "preview",
+            "split",
+            "--fixture",
+            str(OPENMETEO_FIXTURES / "forecast.json"),
+            "--now-playing",
+            str(FIXTURES / "playing_airplay.json"),
+            "--at",
+            "2026-11-06T06:30",
+            "-o",
+            str(out),
+        ]
+    )
+
+    assert code == 0
+    rendered = Image.open(out).convert("RGB")
+    assert rendered.size == (800, 480)
+    assert _only_panel_colors(rendered)
 
 
 def test_preview_game_succeeds_when_configured_cache_dir_is_unwritable(
