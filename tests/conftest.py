@@ -4,14 +4,11 @@
 for pixel. Set ``UPDATE_GOLDENS=1`` to write the golden instead of comparing,
 which is how goldens are (re)generated after a deliberate visual change.
 
-The goldens are Linux-rendered, matching CI and the Raspberry Pi (the real
-render target). Text anti-aliasing is FreeType-build-specific, so regenerate
-them on Linux, not macOS, or the text pixels will not match. For example:
-
-    docker run --rm --platform linux/amd64 -v "$PWD":/repo -w /repo \\
-      -e UV_PROJECT_ENVIRONMENT=/tmp/venv \\
-      ghcr.io/astral-sh/uv:python3.13-bookworm-slim \\
-      bash -c "uv sync && UPDATE_GOLDENS=1 uv run pytest tests/test_screens_art.py"
+Text anti-aliasing depends on the Pillow and FreeType build, which the project
+pins through ``.python-version`` (so CI and local use the same interpreter) and
+the locked Pillow in ``uv.lock``. Regenerate the goldens with the project's own
+toolchain (``uv sync`` honors ``.python-version``); a different Python minor
+version pulls a different Pillow wheel and the text pixels will not match.
 """
 
 from __future__ import annotations
