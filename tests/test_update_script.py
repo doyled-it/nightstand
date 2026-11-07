@@ -257,3 +257,19 @@ def test_invalid_commit_ids_in_state_are_ignored(tmp_path):
     doc = json.loads(status.read_text())
     assert doc["last_good"] == ""
     assert doc["commit"] == a
+
+
+def test_status_file_is_world_readable_for_nginx(tmp_path):
+    origin, _a = _origin(tmp_path)
+    repo = _clone(origin, tmp_path / "repo")
+    bin_dir, state, status, log = _paths(tmp_path)
+    _make_shims(bin_dir, log)
+    env = _env(bin_dir, repo, state, status, log)
+
+    _run_update(env)
+
+    mode = status.stat().st_mode
+    # nginx (a different user) must be able to read the published status file,
+    # so the atomic write cannot leave it at mktemp's private 0600.
+    assert mode & stat.S_IROTH
+    assert mode & stat.S_IRGRP

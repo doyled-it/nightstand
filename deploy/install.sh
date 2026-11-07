@@ -119,15 +119,39 @@ seed_config() {
 
 make_dirs() {
   log "Creating the working directories under $STATE_ROOT"
-  # These are owned by the nightstand user: the app and art sync write them, and
-  # nginx serves public/.
-  for sub in art cache state public; do
+  mkdir -p "$STATE_ROOT"
+  chown root:root "$STATE_ROOT"
+  chmod 0755 "$STATE_ROOT"
+
+  # The nightstand user owns only what the app and art sync write.
+  for sub in art cache state; do
     mkdir -p "$STATE_ROOT/$sub"
     chown nightstand:nightstand "$STATE_ROOT/$sub"
+    chmod 0755 "$STATE_ROOT/$sub"
   done
-  # The self-update state stays root-owned so an unprivileged user cannot steer
-  # which commit the root updater checks out.
+
+  # public/ holds only status.json, written by the root updater and read by
+  # nginx. It stays root-owned so the unprivileged user cannot plant a symlink
+  # there and redirect that root write. nginx reads it by the world bit (0755 /
+  # 0644), it does not need to own it.
+  mkdir -p "$STATE_ROOT/public"
+  chown root:root "$STATE_ROOT/public"
+  chmod 0755 "$STATE_ROOT/public"
+
+  # The self-update state must be writable only by root, so an unprivileged user
+  # cannot steer which commit the root updater keeps. Recreate it if an earlier
+  # run (or a tamperer) left it owned by someone else.
+  if [ -e "$STATE_ROOT/update" ] && [ "$(stat_owner "$STATE_ROOT/update")" != "root" ]; then
+    rm -rf "$STATE_ROOT/update"
+  fi
   mkdir -p "$STATE_ROOT/update"
+  chown root:root "$STATE_ROOT/update"
+  chmod 0700 "$STATE_ROOT/update"
+}
+
+stat_owner() {
+  # The owner's name, portable across GNU and BSD stat.
+  stat -c '%U' "$1" 2>/dev/null || stat -f '%Su' "$1"
 }
 
 install_units() {
