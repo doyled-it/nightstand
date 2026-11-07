@@ -8,7 +8,6 @@ as later tasks land.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 
@@ -48,11 +47,9 @@ class Health:
     """The system-health state the corner marker reflects.
 
     ``problems`` names each machine (this app included) that is on a fallback
-    version or failing its checks, drawn from the published status files.
-    ``stale_since`` is when the current data-source outage began, or ``None``
-    when every source this display depends on is answering. The marker shows
-    whenever either is set.
+    version or failing its checks, drawn from the published status files. The
+    marker shows whenever it is non-empty. A stale data source is not a machine
+    health problem and draws no marker.
     """
 
     problems: tuple[str, ...] = ()
-    stale_since: datetime | None = None

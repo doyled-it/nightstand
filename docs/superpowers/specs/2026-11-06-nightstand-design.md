@@ -99,8 +99,10 @@ one-line edit.
   keys or accounts are needed for anything in this version.
 - Refreshing so often that the frame is a constant flicker in a lit room.
 - A display that freezes silently on stale content. If a data source fails, the screen
-  falls through to the next rule (usually art), and a small marker in a corner shows when
-  the frame last updated successfully.
+  falls through to the next rule (usually art), and the outage is logged. A small red
+  square in the top-right corner flags machine-health problems (a host on a fallback
+  version, failing its checks, or unreachable beyond the grace); a stale data source
+  alone draws no marker.
 
 ## Data sources
 

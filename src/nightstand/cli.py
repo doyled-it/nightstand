@@ -470,7 +470,7 @@ def _render_all_screens() -> None:
 
         marked = marker.apply(
             weather.render(forecast, at),
-            Health(problems=("selftest",), stale_since=at),
+            Health(problems=("selftest",)),
         )
         _save(marked, out / "marker.png")
 
