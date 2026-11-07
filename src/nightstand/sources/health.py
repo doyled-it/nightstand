@@ -71,6 +71,12 @@ def fetch_health(
                 problems.append(f"{host} unreachable")
             continue
         unreachable_since.pop(url, None)
+        if not isinstance(status, dict):
+            # Reachable, but serving something other than a status object. Treat
+            # it as a problem rather than letting ``status.get`` raise and take
+            # the whole poll (and the loop) down.
+            problems.append(f"{host} bad status")
+            continue
         problem = status_problem(status)
         if problem is not None:
             problems.append(f"{host} {problem}")

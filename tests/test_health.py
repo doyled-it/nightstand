@@ -109,6 +109,18 @@ def test_fetch_health_unreachable_over_15_minutes_is_a_problem():
     assert "pi-bedroom.local" in problems[0]
 
 
+def test_fetch_health_reachable_but_not_an_object_is_a_problem():
+    # A machine serving valid JSON that is not a status object (an array, say)
+    # must be reported, not crash the poll on ``status.get``.
+    url = "http://pi-office.local/status.json"
+    client = _Client({url: ["not", "a", "status"]})
+
+    problems = fetch_health(client, (url,), NOW, {})
+
+    assert len(problems) == 1
+    assert "pi-office.local" in problems[0]
+
+
 def test_fetch_health_clears_unreachable_on_recovery():
     url = "http://pi-office.local/status.json"
     client = _Client({url: _status()})

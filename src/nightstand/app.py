@@ -119,10 +119,17 @@ class LiveSources:
         )
 
     def health(self) -> Health:
-        problems = health_source.fetch_health(
-            self._client, self._cfg.health.urls, self._clock(), self._unreachable
+        # Guarded like the other sources so a health-poll failure degrades to
+        # "no known problems" and can never stop the loop.
+        problems = self._guard(
+            "health",
+            lambda: health_source.fetch_health(
+                self._client, self._cfg.health.urls, self._clock(), self._unreachable
+            ),
         )
-        return Health(problems=problems, stale_since=self._stale_since())
+        return Health(
+            problems=problems or (), stale_since=self._stale_since()
+        )
 
     def _fetch_now_playing(self) -> NowPlaying | None:
         status = snapserver.fetch_status(
