@@ -53,7 +53,7 @@ nightstand reaches only these hosts, all keyless public APIs or the LAN hub.
 Keep this list current when a data source is added, and send nothing
 identifying in any request (no name, email, address, or home location).
 
-- `zimablade.local` (the hub): snapserver JSON-RPC and the art share, on the LAN.
+- `house.local` (the hub): snapserver JSON-RPC and the art share, on the LAN.
 - `musicbrainz.org`, `coverartarchive.org`: album cover lookup for now playing.
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot

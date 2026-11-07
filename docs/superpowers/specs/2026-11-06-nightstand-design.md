@@ -13,7 +13,7 @@ readable from bed.
 
 The hardware is a Pimoroni Inky Impression 7.3" (2025, Spectra 6), with 800x480 pixels in
 six colors (black, white, red, yellow, green, blue). It sits in a 5x7" frame (ideally a
-shadow box about 1" deep) mounted landscape, driven by `pi-bedroom`, a Raspberry Pi 5 (1 GB) attached to the back
+shadow box about 1" deep) mounted landscape, driven by the `nightstand` host, a Raspberry Pi 5 (1 GB) attached to the back
 of the panel. The same Pi plays house audio to the bedroom JBL. That part belongs to
 `snaphouse`.
 
@@ -115,7 +115,7 @@ one-line edit.
 ## Art
 
 - Originals live on the `snaphouse` hub, in a shared folder that the owner and partner can
-  drop files into from a Mac or phone. `pi-bedroom` syncs it to a local cache on a timer.
+  drop files into from a Mac or phone. The `nightstand` host syncs it to a local cache on a timer.
   The mechanism is defined in the cross-repo doc.
 - Dithering happens on the Pi at display time (or cached per image), using the Inky
   library's Spectra 6 palette handling. Originals are never modified.
@@ -147,7 +147,7 @@ one-line edit.
 - **Deploy:** a systemd service runs the app. A systemd timer pulls `main` (default every
   15 minutes), syncs dependencies, and restarts the service if anything changed. CI
   (GitHub Actions: lint plus tests) must pass before merge. `main` is protected.
-- **First install on `pi-bedroom`:** the `snaphouse` bootstrap for `pi-bedroom` clones this
+- **First install on the `nightstand` host:** the `snaphouse` bootstrap for the `nightstand` host clones this
   repo and runs its installer once. After that, this repo owns everything display-specific
   on the Pi: enabling SPI and I2C, the `inky` library, its service, its updater, and its
   art sync. One bootstrap per device, with clear ownership afterward. That's my call.

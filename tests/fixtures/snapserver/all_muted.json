@@ -31,7 +31,7 @@
                 "name": "Bedroom",
                 "volume": {"muted": true, "percent": 0}
               },
-              "host": {"arch": "aarch64", "name": "pi-bedroom", "os": "Raspbian"},
+              "host": {"arch": "aarch64", "name": "nightstand", "os": "Raspbian"},
               "lastSeen": {"sec": 1730000000, "usec": 0}
             }
           ]
@@ -51,14 +51,14 @@
                 "name": "Office",
                 "volume": {"muted": false, "percent": 40}
               },
-              "host": {"arch": "aarch64", "name": "pi-office", "os": "Raspbian"},
+              "host": {"arch": "aarch64", "name": "office", "os": "Raspbian"},
               "lastSeen": {"sec": 1730000000, "usec": 0}
             }
           ]
         }
       ],
       "server": {
-        "host": {"arch": "x86_64", "name": "zimablade", "os": "Debian"},
+        "host": {"arch": "x86_64", "name": "house", "os": "Debian"},
         "snapserver": {
           "name": "Snapserver",
           "version": "0.27.0",

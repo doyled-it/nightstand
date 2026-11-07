@@ -11,7 +11,7 @@ NOW = datetime(2026, 11, 6, 21, 15, tzinfo=UTC)
 
 def _status(**overrides) -> dict:
     status = {
-        "host": "pi-office",
+        "host": "office",
         "repo": "snaphouse",
         "commit": "abc123",
         "main_commit": "abc123",
@@ -66,7 +66,7 @@ def test_status_problem_behind_main():
 
 
 def test_fetch_health_all_healthy_has_no_problems():
-    url = "http://pi-office.local/status.json"
+    url = "http://office.local/status.json"
     client = _Client({url: _status()})
     unreachable: dict[str, datetime] = {}
 
@@ -77,17 +77,17 @@ def test_fetch_health_all_healthy_has_no_problems():
 
 
 def test_fetch_health_reports_unhealthy_machine():
-    url = "http://pi-office.local/status.json"
+    url = "http://office.local/status.json"
     client = _Client({url: _status(verify="fail")})
 
     problems = fetch_health(client, (url,), NOW, {})
 
     assert len(problems) == 1
-    assert "pi-office.local" in problems[0]
+    assert "office.local" in problems[0]
 
 
 def test_fetch_health_unreachable_under_15_minutes_is_not_a_problem():
-    url = "http://pi-bedroom.local/status.json"
+    url = "http://nightstand.local/status.json"
     client = _Client({url: httpx.ConnectError("down")})
     unreachable: dict[str, datetime] = {}
 
@@ -99,30 +99,30 @@ def test_fetch_health_unreachable_under_15_minutes_is_not_a_problem():
 
 
 def test_fetch_health_unreachable_over_15_minutes_is_a_problem():
-    url = "http://pi-bedroom.local/status.json"
+    url = "http://nightstand.local/status.json"
     client = _Client({url: httpx.ConnectError("down")})
     unreachable = {url: NOW - timedelta(minutes=16)}
 
     problems = fetch_health(client, (url,), NOW, unreachable)
 
     assert len(problems) == 1
-    assert "pi-bedroom.local" in problems[0]
+    assert "nightstand.local" in problems[0]
 
 
 def test_fetch_health_reachable_but_not_an_object_is_a_problem():
     # A machine serving valid JSON that is not a status object (an array, say)
     # must be reported, not crash the poll on ``status.get``.
-    url = "http://pi-office.local/status.json"
+    url = "http://office.local/status.json"
     client = _Client({url: ["not", "a", "status"]})
 
     problems = fetch_health(client, (url,), NOW, {})
 
     assert len(problems) == 1
-    assert "pi-office.local" in problems[0]
+    assert "office.local" in problems[0]
 
 
 def test_fetch_health_clears_unreachable_on_recovery():
-    url = "http://pi-office.local/status.json"
+    url = "http://office.local/status.json"
     client = _Client({url: _status()})
     unreachable = {url: NOW - timedelta(minutes=30)}
 

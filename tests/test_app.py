@@ -125,7 +125,7 @@ def test_health_problem_adds_marker_and_pushes_once():
     assert run_once(state, cfg, sources, display, NOON) is True
     assert not _marker_present(display.shown[-1])
 
-    sources.health_obj = Health(problems=("pi-office.local behind main",))
+    sources.health_obj = Health(problems=("office.local behind main",))
     assert run_once(state, cfg, sources, display, NOON) is True
     assert _marker_present(display.shown[-1])
     # No further change: the marker state is part of the redraw key.

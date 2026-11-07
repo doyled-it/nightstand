@@ -21,10 +21,20 @@ def test_missing_location_is_none():
 
 def test_defaults_without_path():
     c = load_config()
-    assert c.hub.host == "zimablade.local"
+    assert c.hub.host == "house.local"
     assert c.hub.snapserver_port == 1780
     assert c.schedule.priority == ("morning", "music", "game", "art")
     assert c.paths.cache == Path("/var/lib/nightstand/cache")
+
+
+def test_default_health_urls():
+    c = load_config()
+    assert c.health.urls == (
+        "http://house.local/status.json",
+        "http://office.local/status.json",
+        "http://nightstand.local/status.json",
+        "http://nightstand.local/nightstand/status.json",
+    )
 
 
 def test_env_var_is_read(tmp_path, monkeypatch):

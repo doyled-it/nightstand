@@ -19,7 +19,7 @@ _STATE_ROOT = Path("/var/lib/nightstand")
 
 @dataclass(frozen=True)
 class Hub:
-    host: str = "zimablade.local"
+    host: str = "house.local"
     snapserver_port: int = 1780
     http_port: int = 80
 
@@ -67,10 +67,10 @@ class HealthConfig:
     # Named ``HealthConfig`` (not ``Health``) so it never collides with
     # ``models.Health``, the runtime health state the corner marker draws.
     urls: tuple[str, ...] = (
-        "http://zimablade.local/status.json",
-        "http://pi-office.local/status.json",
-        "http://pi-bedroom.local/status.json",
-        "http://pi-bedroom.local/nightstand/status.json",
+        "http://house.local/status.json",
+        "http://office.local/status.json",
+        "http://nightstand.local/status.json",
+        "http://nightstand.local/nightstand/status.json",
     )
 
 
