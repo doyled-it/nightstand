@@ -413,21 +413,17 @@ def _build_display(args: argparse.Namespace):
 
 
 def _selftest(args: argparse.Namespace) -> int:
-    """Render every screen from the bundled fixtures; record pass/fail.
+    """Render every screen from the bundled fixtures; exit non-zero on failure.
 
-    This is the on-device check ``deploy/update.sh`` runs after an update. The
-    result is written to ``paths.state/selftest.json`` for the updater to read
-    before it decides whether to keep a new version or roll back.
+    This is the on-device check ``deploy/update.sh`` runs after an update.
+    ``update.sh`` reads the exit status directly, so nothing is written to disk.
     """
-    config = load_config()
     try:
         _render_all_screens()
     except Exception as error:  # any failure to render is a failed selftest
         logger.exception("selftest failed")
-        _record_selftest(config, "fail")
         print(f"selftest failed: {error}", file=sys.stderr)
         return 1
-    _record_selftest(config, "pass")
     print("selftest passed")
     return 0
 
@@ -475,16 +471,6 @@ def _save(image: Image.Image, path: Path) -> None:
     image.save(path)
 
 
-def _record_selftest(config: Config, result: str) -> None:
-    state_dir = _resolve_state_dir(config)
-    state_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "result": result,
-        "checked_at": datetime.now().astimezone().isoformat(),
-    }
-    (state_dir / "selftest.json").write_text(json.dumps(payload) + "\n")
-
-
 def _fixtures_dir() -> Path:
     """The recorded fixtures under the repo checkout the app runs from."""
     return Path(__file__).resolve().parents[2] / "tests" / "fixtures"
@@ -502,18 +488,6 @@ def _resolve_cache_dir(config: Config) -> Path:
     if _is_writable_dir(configured):
         return configured
     return _user_cache_dir()
-
-
-def _resolve_state_dir(config: Config) -> Path:
-    """The state dir: the configured one if writable, else a per-user dir.
-
-    Mirrors ``_resolve_cache_dir`` so ``selftest`` can record its result on a
-    dev machine, where ``paths.state`` is not writable.
-    """
-    configured = config.paths.state
-    if _is_writable_dir(configured):
-        return configured
-    return _user_state_dir()
 
 
 def _is_writable_dir(path: Path) -> bool:
@@ -534,13 +508,4 @@ def _user_cache_dir() -> Path:
         return Path.home() / "Library" / "Caches" / "nightstand"
     xdg = os.environ.get("XDG_CACHE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".cache"
-    return base / "nightstand"
-
-
-def _user_state_dir() -> Path:
-    """A per-user state dir that needs no root, for selftest on a dev machine."""
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "nightstand"
-    xdg = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
     return base / "nightstand"

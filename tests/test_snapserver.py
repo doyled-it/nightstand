@@ -36,6 +36,66 @@ def test_parse_bluetooth_without_art_falls_back_to_none_art_url():
     assert np.rooms == ("Office",)
 
 
+def _status_with_metadata(metadata: dict) -> dict:
+    """A minimal GetStatus result: one playing stream to one unmuted room."""
+    return {
+        "server": {
+            "streams": [
+                {
+                    "id": "s1",
+                    "status": "playing",
+                    "properties": {"metadata": metadata},
+                }
+            ],
+            "groups": [
+                {
+                    "stream_id": "s1",
+                    "muted": False,
+                    "clients": [
+                        {
+                            "connected": True,
+                            "config": {
+                                "name": "Office",
+                                "volume": {"muted": False},
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+
+def test_artist_list_is_joined_with_commas():
+    status = _status_with_metadata(
+        {"title": "Track", "artist": ["Nova Reef", "The Saltwater Choir"]}
+    )
+    np = snapserver.parse_now_playing(status)
+
+    assert np is not None
+    assert np.artist == "Nova Reef, The Saltwater Choir"
+
+
+def test_artist_plain_string_is_kept_as_is():
+    status = _status_with_metadata({"title": "Track", "artist": "Lone Sender"})
+    np = snapserver.parse_now_playing(status)
+
+    assert np is not None
+    assert np.artist == "Lone Sender"
+
+
+def test_artist_null_or_missing_becomes_empty_string():
+    null_status = _status_with_metadata({"title": "Track", "artist": None})
+    np_null = snapserver.parse_now_playing(null_status)
+    assert np_null is not None
+    assert np_null.artist == ""
+
+    missing_status = _status_with_metadata({"title": "Track"})
+    np_missing = snapserver.parse_now_playing(missing_status)
+    assert np_missing is not None
+    assert np_missing.artist == ""
+
+
 def test_parse_idle_returns_none():
     assert snapserver.parse_now_playing(_result("idle.json")) is None
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from PIL import Image, ImageChops
@@ -159,7 +158,7 @@ def test_run_once_file_display_writes_png(tmp_path, monkeypatch):
     assert rendered.size == (800, 480)
 
 
-def test_selftest_renders_all_screens_and_records_pass(tmp_path, monkeypatch):
+def test_selftest_renders_all_screens_and_passes(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
     config = tmp_path / "local.toml"
     config.write_text(f'[paths]\nstate = "{state_dir}"\n')
@@ -168,11 +167,8 @@ def test_selftest_renders_all_screens_and_records_pass(tmp_path, monkeypatch):
     code = main(["selftest"])
 
     assert code == 0
-    marker = state_dir / "selftest.json"
-    assert marker.is_file()
-    recorded = json.loads(marker.read_text())
-    assert recorded["result"] == "pass"
-    assert recorded["checked_at"]
+    # update.sh uses the exit status directly; selftest writes nothing to disk.
+    assert not (state_dir / "selftest.json").exists()
 
 
 def test_preview_weather_renders_from_fixture(tmp_path):

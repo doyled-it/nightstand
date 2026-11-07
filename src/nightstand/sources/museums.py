@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 import httpx
 from PIL import Image, UnidentifiedImageError
 
-from nightstand.sources.coverart import USER_AGENT
+from nightstand.sources.coverart import _user_agent
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,7 @@ def _get_json(client: httpx.Client, url: str, params: dict | None) -> dict | Non
         response = client.get(
             url,
             params=params,
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": _user_agent()},
             timeout=_TIMEOUT,
         )
     except httpx.HTTPError as error:
@@ -210,7 +210,7 @@ def _download(client: httpx.Client, url: str, dest: Path) -> bool:
             url,
             # Refuse content-encoding so a small compressed body cannot amplify
             # past the byte cap before it is written.
-            headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"},
+            headers={"User-Agent": _user_agent(), "Accept-Encoding": "identity"},
             timeout=_TIMEOUT,
         ) as response:
             if response.status_code != 200:

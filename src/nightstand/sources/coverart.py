@@ -33,11 +33,34 @@ logger = logging.getLogger(__name__)
 
 # MusicBrainz asks callers to identify themselves. The version comes from the
 # installed package metadata so it tracks the release, and the contact is the
-# public repo URL, with nothing personal.
-USER_AGENT = (
-    f"nightstand/{importlib.metadata.version('nightstand')} "
-    "( https://github.com/doyled-it/nightstand )"
-)
+# public repo URL, with nothing personal. It is resolved lazily on the first
+# request and cached, with an "unknown" fallback, so importing nightstand from a
+# source checkout that was never installed cannot raise at import time.
+_user_agent_cache: str | None = None
+
+
+def _package_version() -> str:
+    try:
+        return importlib.metadata.version("nightstand")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _user_agent() -> str:
+    global _user_agent_cache
+    if _user_agent_cache is None:
+        _user_agent_cache = (
+            f"nightstand/{_package_version()} "
+            "( https://github.com/doyled-it/nightstand )"
+        )
+    return _user_agent_cache
+
+
+def __getattr__(name: str) -> str:
+    # Keep ``coverart.USER_AGENT`` working as a lazily-resolved module attribute.
+    if name == "USER_AGENT":
+        return _user_agent()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _MUSICBRAINZ_SEARCH = "https://musicbrainz.org/ws/2/release/"
 _COVER_ART_ARCHIVE = "https://coverartarchive.org/release/{mbid}/front-500"
@@ -152,7 +175,7 @@ class CoverArt:
                     "fmt": "json",
                     "limit": 1,
                 },
-                headers={"User-Agent": USER_AGENT},
+                headers={"User-Agent": _user_agent()},
                 timeout=_TIMEOUT,
             )
         except httpx.HTTPError as error:
@@ -198,7 +221,7 @@ class CoverArt:
                 url,
                 # Refuse content-encoding so a small compressed body cannot
                 # amplify past the byte cap; covers are already-compressed images.
-                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"},
+                headers={"User-Agent": _user_agent(), "Accept-Encoding": "identity"},
                 follow_redirects=follow_redirects,
                 timeout=_TIMEOUT,
             ) as response:

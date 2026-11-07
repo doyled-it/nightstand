@@ -179,6 +179,19 @@ def test_user_agent_matches_the_package_version(tmp_path):
     )
 
 
+def test_user_agent_falls_back_to_unknown_without_package_metadata(monkeypatch):
+    def raise_missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    # Reset the lazy cache so the fallback path runs, then make metadata missing.
+    monkeypatch.setattr(coverart, "_user_agent_cache", None)
+    monkeypatch.setattr(importlib.metadata, "version", raise_missing)
+
+    ua = coverart._user_agent()
+
+    assert ua == "nightstand/unknown ( https://github.com/doyled-it/nightstand )"
+
+
 def test_malformed_200_body_returns_none_and_caches_no_miss(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "musicbrainz.org"
