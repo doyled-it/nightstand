@@ -34,6 +34,10 @@ status="${NIGHTSTAND_STATUS:-/var/lib/nightstand/public/status.json}"
 service="${NIGHTSTAND_SERVICE:-nightstand}"
 host="${NIGHTSTAND_HOST:-$(hostname)}"
 
+# Re-sync with uv's managed Python from the same shared, world-readable location
+# install.sh uses, so the venv interpreter stays reachable by the service user.
+export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-/opt/uv/python}"
+
 cd "$repo"
 
 # Only a full git object id is a trusted commit. The state file lives on the
@@ -119,7 +123,7 @@ fi
 
 # Try the target: check it out, sync deps, verify.
 git checkout --quiet "$main_commit"
-if uv sync --extra pi --frozen && nightstand selftest >/dev/null 2>&1; then
+if uv sync --extra pi --frozen --python-preference only-managed && nightstand selftest >/dev/null 2>&1; then
   last_good="$main_commit"
   failed=""
   write_state
@@ -142,7 +146,7 @@ fi
 # Fall back to the last good commit, sync, and restart. Exit non-zero only if
 # even the fallback fails to verify, so the timer leaves a visible failure.
 git checkout --quiet "$last_good"
-uv sync --extra pi --frozen || true
+uv sync --extra pi --frozen --python-preference only-managed || true
 systemctl restart "$service"
 recovered="$(verify_word)"
 write_status "$recovered"

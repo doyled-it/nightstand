@@ -261,6 +261,48 @@ def test_preview_game_succeeds_when_configured_cache_dir_is_unwritable(
     assert {color for _, color in colors} <= set(PURE.values())
 
 
+class _RecordingInky:
+    """A fake ``InkyDisplay`` that records its saturation and the image shown."""
+
+    instances: list[_RecordingInky] = []
+
+    def __init__(self, saturation=None):
+        self.saturation = saturation
+        self.shown: Image.Image | None = None
+        _RecordingInky.instances.append(self)
+
+    def show(self, img: Image.Image) -> None:
+        self.shown = img
+
+
+def test_show_pushes_png_to_panel(tmp_path, monkeypatch):
+    _RecordingInky.instances = []
+    monkeypatch.setattr("nightstand.cli.InkyDisplay", _RecordingInky)
+    png = tmp_path / "frame.png"
+    Image.new("RGB", (800, 480), (0, 0, 255)).save(png)
+
+    code = main(["show", str(png)])
+
+    assert code == 0
+    assert len(_RecordingInky.instances) == 1
+    inky = _RecordingInky.instances[0]
+    assert inky.saturation is None
+    assert inky.shown is not None
+    assert inky.shown.size == (800, 480)
+
+
+def test_show_passes_saturation(tmp_path, monkeypatch):
+    _RecordingInky.instances = []
+    monkeypatch.setattr("nightstand.cli.InkyDisplay", _RecordingInky)
+    png = tmp_path / "frame.png"
+    Image.new("RGB", (800, 480), (255, 0, 0)).save(png)
+
+    code = main(["show", str(png), "--saturation", "0.8"])
+
+    assert code == 0
+    assert _RecordingInky.instances[0].saturation == 0.8
+
+
 def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
     captured = {}
 

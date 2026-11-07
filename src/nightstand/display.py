@@ -39,15 +39,23 @@ class InkyDisplay:
 
     The image is already reduced to the six pure panel colors, so the library
     does no extra mapping: ``set_image`` then ``show`` paints it as given.
+
+    ``saturation`` controls how vivid the six Spectra 6 inks render. Left unset,
+    the library's own default stands; a value (0.0 to 1.0) is passed through for
+    tuning against the real panel.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, saturation: float | None = None) -> None:
         # Imported here, not at module load, so a Mac without the Pi-only
         # ``inky`` extra can still import nightstand for previews and tests.
         from inky.auto import auto
 
         self._inky = auto()
+        self._saturation = saturation
 
     def show(self, img: Image.Image) -> None:
-        self._inky.set_image(img)
+        if self._saturation is None:
+            self._inky.set_image(img)
+        else:
+            self._inky.set_image(img, saturation=self._saturation)
         self._inky.show()
