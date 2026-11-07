@@ -43,6 +43,64 @@ def test_caption_title_only_sidecar(tmp_path):
     assert piece.artist is None
 
 
+def test_sidecar_source_url_when_https(tmp_path):
+    _write_image(tmp_path / "coastal.jpg")
+    (tmp_path / "coastal.jpg.txt").write_text(
+        "Coastal Study\nArtist Name\nhttps://example.org/art/123\n"
+    )
+
+    piece = ArtLibrary(tmp_path).pieces()[0]
+
+    assert piece.title == "Coastal Study"
+    assert piece.artist == "Artist Name"
+    assert piece.source_url == "https://example.org/art/123"
+
+
+def test_sidecar_source_url_ignored_when_not_https(tmp_path):
+    _write_image(tmp_path / "coastal.jpg")
+    (tmp_path / "coastal.jpg.txt").write_text(
+        "Coastal Study\nArtist Name\nnot a url\n"
+    )
+
+    piece = ArtLibrary(tmp_path).pieces()[0]
+
+    assert piece.source_url is None
+
+
+def test_sidecar_source_url_rejects_non_https_scheme(tmp_path):
+    _write_image(tmp_path / "coastal.jpg")
+    (tmp_path / "coastal.jpg.txt").write_text(
+        "Coastal Study\nArtist Name\nhttp://example.org/art/123\n"
+    )
+
+    piece = ArtLibrary(tmp_path).pieces()[0]
+
+    assert piece.source_url is None
+
+
+def test_sidecar_source_url_with_empty_artist(tmp_path):
+    # Line 2 blank, line 3 a URL: the artist is None and the URL still parses.
+    _write_image(tmp_path / "coastal.jpg")
+    (tmp_path / "coastal.jpg.txt").write_text(
+        "Coastal Study\n\nhttps://example.org/art/123\n"
+    )
+
+    piece = ArtLibrary(tmp_path).pieces()[0]
+
+    assert piece.title == "Coastal Study"
+    assert piece.artist is None
+    assert piece.source_url == "https://example.org/art/123"
+
+
+def test_two_line_sidecar_has_no_source_url(tmp_path):
+    _write_image(tmp_path / "coastal.jpg")
+    (tmp_path / "coastal.jpg.txt").write_text("Coastal Study\nArtist Name\n")
+
+    piece = ArtLibrary(tmp_path).pieces()[0]
+
+    assert piece.source_url is None
+
+
 def test_caption_from_filename(tmp_path):
     _write_image(tmp_path / "coastal_study-1.jpg")
 

@@ -160,13 +160,20 @@ make_dirs() {
     chmod 0755 "$STATE_ROOT/$sub"
   done
 
-  # public/ holds only status.json, written by the root updater and read by
-  # nginx. It stays root-owned so the unprivileged user cannot plant a symlink
-  # there and redirect that root write. nginx reads it by the world bit (0755 /
-  # 0644), it does not need to own it.
+  # public/ is served by nginx and holds two files: status.json, written by the
+  # root self-updater, and art-history.json, written by the app as the
+  # unprivileged nightstand user. root keeps ownership of the directory, so the
+  # entry under the root-owned state root cannot be swapped and the updater's
+  # atomic status.json write (a uniquely named temp plus rename, which never
+  # follows a planted symlink) stays safe. The nightstand group gets write so
+  # the app can publish art-history.json, and the sticky bit stops that
+  # unprivileged user from deleting or replacing the root-written status.json.
+  # nginx reads both files by the world bit (0775 dir / 0644 files). See the
+  # write_atomic comment in deploy/update.sh for why that root write stays safe
+  # in this group-writable directory.
   mkdir -p "$STATE_ROOT/public"
-  chown root:root "$STATE_ROOT/public"
-  chmod 0755 "$STATE_ROOT/public"
+  chown root:nightstand "$STATE_ROOT/public"
+  chmod 1775 "$STATE_ROOT/public"
 
   # The self-update state must be writable only by root, so an unprivileged user
   # cannot steer which commit the root updater keeps. Recreate it if an earlier

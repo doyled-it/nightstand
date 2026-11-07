@@ -19,6 +19,7 @@ from nightstand.app import (
     schedule_due,
 )
 from nightstand.config import Config, Location, Schedule
+from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
 from nightstand.palette import PURE
 from nightstand.screens.common import HEIGHT, WIDTH
@@ -183,6 +184,51 @@ def test_run_once_renders_art_from_piece(tmp_path):
 
     assert run_once(AppState(), cfg, sources, display, NOON) is True
     assert display.shown[0].size == (WIDTH, HEIGHT)
+
+
+def test_run_once_records_art_history_when_art_pushed(tmp_path):
+    cfg = _loop_config()
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(
+        path=art_path, title="Title", artist="Artist", source_url="https://x.org/1"
+    )
+    history = ArtHistory(tmp_path / "art-history.json")
+
+    assert run_once(AppState(), cfg, sources, RecordingDisplay(), NOON, history) is True
+
+    data = json.loads((tmp_path / "art-history.json").read_text())
+    assert data["current"]["file"] == "piece.png"
+    assert data["current"]["source_url"] == "https://x.org/1"
+
+
+def test_run_once_non_art_screen_does_not_record_history(tmp_path):
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    history = ArtHistory(tmp_path / "art-history.json")
+
+    assert run_once(AppState(), cfg, sources, RecordingDisplay(), NOON, history) is True
+
+    assert not (tmp_path / "art-history.json").exists()
+
+
+def test_art_history_records_once_across_repeated_cycles(tmp_path):
+    cfg = _loop_config()
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=art_path, title="Title", artist=None)
+    history = ArtHistory(tmp_path / "art-history.json")
+    state = AppState()
+    display = RecordingDisplay()
+
+    for _ in range(3):
+        run_once(state, cfg, sources, display, NOON, history)
+
+    data = json.loads((tmp_path / "art-history.json").read_text())
+    assert [entry["file"] for entry in data["history"]] == ["piece.png"]
 
 
 def test_run_once_renders_weather_in_morning_window():

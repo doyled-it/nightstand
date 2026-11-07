@@ -1,51 +1,33 @@
-"""The art screen: a full-bleed dithered image with a caption bar.
+"""The art screen: the whole piece, scaled to fit, on a white border.
 
-The image is scaled to cover 800x480 and center-cropped, then Floyd-Steinberg
-dithered to the panel's six colors. A black bar along the bottom carries the
-caption in bold white: ``"{title} · {artist}"``, or just the title when
-there is no artist.
+The image is scaled to sit entirely inside 800x480 with its aspect ratio
+preserved, Floyd-Steinberg dithered to the panel's six colors, and centered on
+a pure-white 800x480 canvas. The white margins fill whichever two sides the
+image does not reach. There is no caption bar: the owner chose to show the art
+alone and keep its history (with titles and museum links) off the panel.
 """
 
 from __future__ import annotations
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from nightstand.models import ArtPiece
-from nightstand.palette import PURE, dither_to_panel, to_six_colors
-from nightstand.screens.common import HEIGHT, WIDTH, cover_crop
-from nightstand.text import font, wrap
-
-CAPTION_HEIGHT = 44
-CAPTION_PADDING = 16
-CAPTION_SIZE = 24
+from nightstand.palette import PURE, dither_to_panel
+from nightstand.screens.common import HEIGHT, WIDTH, contain_fit
 
 
 def render(piece: ArtPiece, image: Image.Image) -> Image.Image:
-    """Render ``piece`` over ``image`` at 800x480."""
-    cropped = cover_crop(image.convert("RGB"), WIDTH, HEIGHT)
-    canvas = dither_to_panel(cropped)
+    """Render ``piece``'s ``image`` whole on an 800x480 white canvas."""
+    # ``piece`` is unused: the panel shows the image alone, and the caption now
+    # lives in the published history rather than on screen. The parameter stays
+    # so every screen keeps the same ``render(model, image)`` shape.
+    del piece
+    fitted = contain_fit(image.convert("RGB"), WIDTH, HEIGHT)
+    dithered = dither_to_panel(fitted)
 
-    draw = ImageDraw.Draw(canvas)
-    bar_top = HEIGHT - CAPTION_HEIGHT
-    draw.rectangle([0, bar_top, WIDTH, HEIGHT], fill=PURE["black"])
-
-    caption_font = font("bold", CAPTION_SIZE)
-    max_width = WIDTH - 2 * CAPTION_PADDING
-    lines = wrap(draw, _caption(piece), caption_font, max_width, 1)
-    line = lines[0] if lines else ""
-    draw.text(
-        (CAPTION_PADDING, bar_top + CAPTION_HEIGHT // 2),
-        line,
-        font=caption_font,
-        fill=PURE["white"],
-        anchor="lm",
-    )
-    # The dithered art is already pure, but the caption's anti-aliased edges are
-    # not. Snap the whole canvas so the panel only ever receives six colors.
-    return to_six_colors(canvas)
-
-
-def _caption(piece: ArtPiece) -> str:
-    if piece.artist:
-        return f"{piece.title} · {piece.artist}"
-    return piece.title
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), PURE["white"])
+    offset = ((WIDTH - fitted.width) // 2, (HEIGHT - fitted.height) // 2)
+    canvas.paste(dithered, offset)
+    # The dithered image is already six pure colors and the border is pure
+    # white, so the canvas is panel-ready without a further snap.
+    return canvas

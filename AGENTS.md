@@ -47,6 +47,27 @@ Local config overlays the defaults. The app reads an explicit path, then
 `$NIGHTSTAND_CONFIG`, then `/etc/nightstand/local.toml`. Real coordinates and
 anything identifying live in the untracked local config, never in the repo.
 
+## Published files
+
+The app and the self-updater publish into `paths.public`
+(`/var/lib/nightstand/public`), which snaphouse's nginx on the nightstand host
+serves over the LAN. Never commit these; they are written on the device.
+
+- `status.json`: this machine's health, written only by the root self-updater
+  (`deploy/update.sh`). See the health marker and the cross-repo status schema.
+- `art-history.json`: the last 50 art pieces shown, newest first, rewritten
+  atomically (0644) by the app each time the art screen is pushed to the panel.
+  Shape `{"current": Piece | null, "history": [Piece, ...]}`, `current` the same
+  object as `history[0]`, each `Piece` being
+  `{"file", "title", "artist", "source_url", "shown_at"}`. snaphouse consumes
+  it at `http://nightstand.local/nightstand/art-history.json`; the contract is
+  pinned in the hub's `docs/cross-repo-features.md`.
+
+Art sidecar captions (`<image file>.txt`, one beside each image): line 1 title,
+line 2 artist (may be empty), optional line 3 the museum object page as an
+`https` URL (ignored unless it parses as https). Without a sidecar the title
+falls back to the filename.
+
 ## External hosts (allowlist)
 
 nightstand reaches only these hosts, all keyless public APIs or the LAN hub.
