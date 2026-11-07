@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command")
     _add_preview(subparsers)
+    _add_show(subparsers)
     _add_run(subparsers)
     _add_selftest(subparsers)
     _add_art(subparsers)
@@ -66,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "preview":
         return _run_preview(args)
+    if args.command == "show":
+        return _show(args)
     if args.command == "run":
         return _run(args)
     if args.command == "selftest":
@@ -76,6 +79,19 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config()
     print(f"nightstand {__version__}: hub {config.hub.host}")
     return 0
+
+
+def _add_show(subparsers: argparse._SubParsersAction) -> None:
+    show = subparsers.add_parser(
+        "show", help="push a PNG to the panel (on the Pi, with the inky extra)"
+    )
+    show.add_argument("path", type=Path, help="the PNG to display")
+    show.add_argument(
+        "--saturation",
+        type=float,
+        default=None,
+        help="how vivid the six inks render, 0.0 to 1.0 (default: the driver's)",
+    )
 
 
 def _add_run(subparsers: argparse._SubParsersAction) -> None:
@@ -315,6 +331,17 @@ def _preview_split(args: argparse.Namespace) -> int:
         rendered = split.render(forecast, np, cover, at)
 
     FileDisplay(args.out, panel=args.panel).show(rendered)
+    return 0
+
+
+def _show(args: argparse.Namespace) -> int:
+    """Load a PNG and push it to the panel through the Inky driver.
+
+    The image is sent as given; a screen rendered by nightstand is already
+    reduced to the six pure panel colors.
+    """
+    img = Image.open(args.path)
+    InkyDisplay(saturation=args.saturation).show(img)
     return 0
 
 

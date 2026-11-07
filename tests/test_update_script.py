@@ -49,8 +49,12 @@ def _write_shim(path: Path, body: str) -> None:
 
 def _make_shims(bin_dir: Path, log: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
-    # uv does nothing but succeed.
-    _write_shim(bin_dir / "uv", 'echo "uv $*" >> "$SHIM_LOG"\nexit 0\n')
+    # uv does nothing but succeed; it records the call and the managed-Python
+    # install dir it ran with.
+    _write_shim(
+        bin_dir / "uv",
+        'echo "uv $* [py=$UV_PYTHON_INSTALL_DIR]" >> "$SHIM_LOG"\nexit 0\n',
+    )
     # systemctl does nothing but succeed, recording the call.
     _write_shim(bin_dir / "systemctl", 'echo "systemctl $*" >> "$SHIM_LOG"\nexit 0\n')
     # selftest passes unless the checked-out SELFTEST file says "fail".
@@ -194,6 +198,27 @@ def test_bad_commit_rolls_back_and_is_not_retried_until_main_moves(tmp_path):
     _run_update(env)
     assert _git(repo, "rev-parse", "HEAD") == d
     assert state.read_text().splitlines()[0] == d
+
+
+def test_sync_uses_shared_managed_python(tmp_path):
+    origin, _a = _origin(tmp_path)
+    repo = _clone(origin, tmp_path / "repo")
+    bin_dir, state, status, log = _paths(tmp_path)
+    _make_shims(bin_dir, log)
+    env = _env(bin_dir, repo, state, status, log)
+    # No install dir in the environment, so update.sh must supply the shared
+    # default the service user can reach, matching install.sh.
+    env.pop("UV_PYTHON_INSTALL_DIR", None)
+
+    _advance(origin, "pass", "B")
+    result = _run_update(env)
+
+    assert result.returncode == 0, result.stderr
+    uv_line = next(
+        line for line in log.read_text().splitlines() if line.startswith("uv sync")
+    )
+    assert "[py=/opt/uv/python]" in uv_line
+    assert "--python-preference only-managed" in uv_line
 
 
 def test_unreachable_origin_changes_nothing_but_writes_status(tmp_path):

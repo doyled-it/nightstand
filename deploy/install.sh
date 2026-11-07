@@ -21,6 +21,10 @@ CONFIG_DIR="/etc/nightstand"
 STATE_ROOT="/var/lib/nightstand"
 BOOT_CONFIG="/boot/firmware/config.txt"
 SYSTEMD_DIR="/etc/systemd/system"
+# uv's managed Python lives in a shared, world-readable location (not root's
+# private ~/.local/share/uv) so the unprivileged service user can exec the venv
+# interpreter. The self-updater uses the same directory.
+UV_PYTHON_DIR="/opt/uv/python"
 
 # uv release pinned to match snaphouse (vars/all.yml). Bump the version and both
 # checksums together from the release's uv-<arch>-unknown-linux-gnu.tar.gz.sha256.
@@ -39,6 +43,21 @@ require_root() {
     echo "install.sh must run as root" >&2
     exit 1
   fi
+}
+
+ensure_base_packages() {
+  # The minimal Raspberry Pi OS image ships without git (and sometimes curl),
+  # which this script needs to fetch uv and clone the repo. Install whatever is
+  # missing with apt before it is used; a full image makes this a no-op.
+  local missing=()
+  command -v git >/dev/null 2>&1 || missing+=(git)
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return
+  fi
+  log "Installing base packages: ${missing[*]}"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
 }
 
 enable_interfaces() {
@@ -106,7 +125,17 @@ sync_repo() {
     git clone --quiet "$REPO_URL" "$REPO_DIR"
   fi
   log "Syncing the Python environment"
-  ( cd "$REPO_DIR" && uv sync --extra pi --frozen )
+  # Use uv's own managed Python, not the system interpreter. The Pi-only inky
+  # extra pulls spidev, a C extension that builds against Python.h; a minimal
+  # image has no python3-dev headers, and the standalone managed build ships
+  # them. This also keeps Python fully uv-managed, as the install is meant to be.
+  # UV_PYTHON_INSTALL_DIR puts that interpreter where the service user can reach
+  # it; uv creates the directory (world-readable) on download.
+  (
+    cd "$REPO_DIR" &&
+      UV_PYTHON_INSTALL_DIR="$UV_PYTHON_DIR" \
+        uv sync --extra pi --frozen --python-preference only-managed
+  )
 }
 
 seed_config() {
@@ -166,6 +195,7 @@ install_units() {
 
 main() {
   require_root
+  ensure_base_packages
   enable_interfaces
   create_user
   install_uv
@@ -179,4 +209,8 @@ main() {
   fi
 }
 
-main "$@"
+# Run only when executed, not when sourced (the test suite sources this file to
+# drive individual functions with shimmed commands).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
