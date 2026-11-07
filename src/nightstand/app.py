@@ -2,7 +2,7 @@
 
 ``LiveSources`` is the one place that talks to the network. Every source call
 is wrapped so a failure logs once when the outage starts, returns ``None``, and
-marks the source stale until it answers again; the loop never crashes on a blip.
+retries until it answers again; the loop never crashes on a blip.
 
 ``run_once`` evaluates the rules for a single moment: it reads each source,
 asks ``rules.decide`` what to show, folds the health-marker state into the
@@ -143,9 +143,9 @@ class LiveSources:
     """The real sources, each wrapped to degrade to ``None`` on failure.
 
     An exception in a source call logs one warning when the outage begins (not
-    on every failing cycle) and marks that source stale until it answers again.
-    ``health().stale_since`` is the earliest such active outage, which is what
-    the corner marker reflects.
+    on every failing cycle) and is retried until it answers again. A source
+    outage degrades that source to ``None``; it does not draw the corner marker,
+    which reflects machine-health problems only.
     """
 
     def __init__(
@@ -259,9 +259,7 @@ class LiveSources:
                 self._client, self._cfg.health.urls, self._clock(), self._unreachable
             ),
         )
-        return Health(
-            problems=problems or (), stale_since=self._stale_since()
-        )
+        return Health(problems=problems or ())
 
     def _fetch_now_playing(self) -> NowPlaying | None:
         status = snapserver.fetch_status(
@@ -290,13 +288,8 @@ class LiveSources:
 
     def _clear_outage(self, name: str) -> None:
         # A source we deliberately did not poll this cycle (cache hit, out of
-        # window, no game) is not failing, so it must not feed ``stale_since``.
+        # window, no game) is not failing, so it leaves no lingering outage.
         self._outages.pop(name, None)
-
-    def _stale_since(self) -> datetime | None:
-        if not self._outages:
-            return None
-        return min(self._outages.values())
 
 
 @dataclass
@@ -306,9 +299,14 @@ class AppState:
     The key already folds in the marker state, so a change in health alone is
     enough to make the next permitted redraw repaint. (Outage tracking lives in
     ``LiveSources``, which is where the failing source calls are caught.)
+
+    ``history_write_failing`` remembers whether the last art-history write
+    failed, so a persistent write outage is logged once (on the state change)
+    rather than on every cycle.
     """
 
     last_key: tuple | None = None
+    history_write_failing: bool = False
 
 
 def run_once(
@@ -331,7 +329,7 @@ def run_once(
     decision = rules.decide(now, cfg, ctx)
 
     health = sources.health()
-    marker_state = (bool(health.problems), health.stale_since)
+    marker_state = bool(health.problems)
     key = decision.redraw_key + (marker_state,)
 
     keyed = replace(decision, redraw_key=key)
@@ -349,8 +347,30 @@ def run_once(
         # decision means the art screen is what reached the panel. Record it;
         # the history itself drops a piece that is already current, so a redraw
         # under the same slot (a marker flip, say) does not add a duplicate.
-        history.record(art_piece, now)
+        _record_history(state, history, art_piece, now)
     return True
+
+
+def _record_history(
+    state: AppState, history: ArtHistory, piece: ArtPiece, now: datetime
+) -> None:
+    """Record ``piece`` in the art history, surviving any write failure.
+
+    The display is already pushed by the time this runs. A write to the public
+    directory can still fail (it may not be writable yet on a fresh boot), and
+    that failure must never stop the loop or systemd will restart it into an
+    endless e-ink repaint. Swallow the error and log it once per outage.
+    """
+    try:
+        history.record(piece, now)
+    except OSError as error:
+        if not state.history_write_failing:
+            state.history_write_failing = True
+            logger.warning("art history write failed: %s", error)
+        return
+    if state.history_write_failing:
+        state.history_write_failing = False
+        logger.info("art history write recovered")
 
 
 def run_forever(

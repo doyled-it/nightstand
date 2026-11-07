@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 from nightstand.models import ArtPiece
 from nightstand.palette import PURE
 from nightstand.screens import art, placeholder
-from nightstand.screens.common import HEIGHT, WIDTH, contain_fit
+from nightstand.screens.common import HEIGHT, WIDTH
 
 
 def _is_six_color(img: Image.Image) -> bool:
@@ -20,8 +20,9 @@ def _is_six_color(img: Image.Image) -> bool:
 def sample_image() -> Image.Image:
     """A deterministic 1000x700 test image: a diagonal gradient with shapes.
 
-    Non-square so the art screen's contain-fit leaves white margins on two
-    sides, and built in code so no artwork is downloaded or committed.
+    Non-square so the art screen's cover-crop scales it to fill the panel and
+    crops the overflow, and built in code so no artwork is downloaded or
+    committed.
     """
     img = Image.new("RGB", (1000, 700))
     draw = ImageDraw.Draw(img)
@@ -36,73 +37,52 @@ def sample_image() -> Image.Image:
     return img
 
 
-def _margins_are_pure_white(img: Image.Image, fitted: Image.Image) -> bool:
-    """Every pixel outside the centered fitted region is pure white."""
+def _edge_bands(img: Image.Image) -> list[list[tuple[int, int, int]]]:
+    """The four one-pixel edge rows and columns, as lists of RGB pixels."""
     rgb = img.convert("RGB")
-    left = (WIDTH - fitted.width) // 2
-    top = (HEIGHT - fitted.height) // 2
-    right = left + fitted.width
-    bottom = top + fitted.height
-    for x in range(WIDTH):
-        for y in range(HEIGHT):
-            if left <= x < right and top <= y < bottom:
-                continue
-            if rgb.getpixel((x, y)) != PURE["white"]:
-                return False
-    return True
+    w, h = rgb.size
+    top = [rgb.getpixel((x, 0)) for x in range(w)]
+    bottom = [rgb.getpixel((x, h - 1)) for x in range(w)]
+    left = [rgb.getpixel((0, y)) for y in range(h)]
+    right = [rgb.getpixel((w - 1, y)) for y in range(h)]
+    return [top, bottom, left, right]
 
 
-def test_contain_fit_wide_image_fits_inside_canvas():
-    fitted = contain_fit(Image.new("RGB", (1000, 500)), WIDTH, HEIGHT)
-    assert fitted.width <= WIDTH and fitted.height <= HEIGHT
-    # The limiting dimension (width) fills the canvas exactly.
-    assert fitted.width == WIDTH
-    # Aspect ratio preserved within rounding.
-    assert abs(fitted.width / fitted.height - 1000 / 500) < 0.01
+def _no_white_margin_bands(img: Image.Image) -> bool:
+    """No edge row or column is entirely pure white: the art reaches every edge."""
+    return all(
+        any(px != PURE["white"] for px in band) for band in _edge_bands(img)
+    )
 
 
-def test_contain_fit_tall_image_fits_inside_canvas():
-    fitted = contain_fit(Image.new("RGB", (500, 1000)), WIDTH, HEIGHT)
-    assert fitted.width <= WIDTH and fitted.height <= HEIGHT
-    assert fitted.height == HEIGHT
-    assert abs(fitted.width / fitted.height - 500 / 1000) < 0.01
-
-
-def test_contain_fit_square_image_fits_inside_canvas():
-    fitted = contain_fit(Image.new("RGB", (600, 600)), WIDTH, HEIGHT)
-    assert fitted.width <= WIDTH and fitted.height <= HEIGHT
-    assert fitted.height == HEIGHT
-    assert fitted.width == fitted.height
-
-
-def test_render_art_wide_has_pure_white_margins():
+def test_render_art_wide_fills_screen():
     piece = ArtPiece(path=Path("x.jpg"), title="Wide", artist=None)
     image = Image.new("RGB", (1000, 500), PURE["blue"])
 
     out = art.render(piece, image)
-    fitted = contain_fit(image.convert("RGB"), WIDTH, HEIGHT)
 
-    assert _margins_are_pure_white(out, fitted)
+    assert out.size == (WIDTH, HEIGHT)
+    assert _no_white_margin_bands(out)
 
 
-def test_render_art_tall_has_pure_white_margins():
+def test_render_art_tall_fills_screen():
     piece = ArtPiece(path=Path("x.jpg"), title="Tall", artist=None)
     image = Image.new("RGB", (500, 1000), PURE["blue"])
 
     out = art.render(piece, image)
-    fitted = contain_fit(image.convert("RGB"), WIDTH, HEIGHT)
 
-    assert _margins_are_pure_white(out, fitted)
+    assert out.size == (WIDTH, HEIGHT)
+    assert _no_white_margin_bands(out)
 
 
-def test_render_art_square_has_pure_white_margins():
+def test_render_art_square_fills_screen():
     piece = ArtPiece(path=Path("x.jpg"), title="Square", artist=None)
     image = Image.new("RGB", (600, 600), PURE["blue"])
 
     out = art.render(piece, image)
-    fitted = contain_fit(image.convert("RGB"), WIDTH, HEIGHT)
 
-    assert _margins_are_pure_white(out, fitted)
+    assert out.size == (WIDTH, HEIGHT)
+    assert _no_white_margin_bands(out)
 
 
 def test_render_art_matches_golden(assert_golden):

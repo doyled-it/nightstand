@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from PIL import Image
 
 from nightstand.models import Health
@@ -34,19 +32,12 @@ def test_apply_draws_red_square_in_top_right_for_problems():
     assert _only_panel_colors(out)
 
 
-def test_apply_draws_since_text_beside_square_when_stale():
-    stale = datetime(2026, 11, 6, 7, 5, tzinfo=UTC)
-    out = marker.apply(_blank(), Health(stale_since=stale))
+def test_apply_draws_no_text_beside_square():
+    # Staleness no longer draws a "since HH:MM" label: only the square appears,
+    # so the strip to the left of the square stays blank.
+    out = marker.apply(_blank(), Health(problems=("office.local down",)))
 
-    # The square is still drawn.
-    assert out.getpixel((WIDTH - 8 - 7, 8 + 7)) == PURE["red"]
-    # "since 07:05" text appears to the left of the square: black pixels in the
-    # top strip, left of where the square begins.
     square_left = WIDTH - 8 - 14
-    black_left = 0
     for x in range(0, square_left):
         for y in range(0, 30):
-            if out.getpixel((x, y)) == PURE["black"]:
-                black_left += 1
-    assert black_left > 0
-    assert _only_panel_colors(out)
+            assert out.getpixel((x, y)) == PURE["white"]

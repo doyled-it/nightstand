@@ -138,7 +138,7 @@ def test_recovery_clears_marker_and_pushes_once():
     cfg = _loop_config()
     sources = FakeSources()
     sources.np = NowPlaying("Song", "Artist")
-    sources.health_obj = Health(stale_since=datetime(2026, 11, 6, 11, 0, tzinfo=UTC))
+    sources.health_obj = Health(problems=("office.local behind main",))
     display = RecordingDisplay()
     state = AppState()
 
@@ -147,6 +147,23 @@ def test_recovery_clears_marker_and_pushes_once():
 
     sources.health_obj = Health()
     assert run_once(state, cfg, sources, display, NOON) is True
+    assert not _marker_present(display.shown[-1])
+
+
+def test_data_source_outage_draws_no_marker(tmp_path):
+    # A stale data source (an outage within the health grace) is not a machine
+    # health problem, so it must not draw the corner marker.
+    cfg = Config(location=Location(timezone="UTC"))
+    status = json.loads(
+        (FIXTURES / "snapserver" / "playing_airplay.json").read_text()
+    )
+    client = _SnapserverClient(status)
+    client.fail = True
+    live = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+    display = RecordingDisplay()
+
+    assert run_once(AppState(), cfg, live, display, NOON) is True
+    assert live.health().problems == ()
     assert not _marker_present(display.shown[-1])
 
 
@@ -229,6 +246,60 @@ def test_art_history_records_once_across_repeated_cycles(tmp_path):
 
     data = json.loads((tmp_path / "art-history.json").read_text())
     assert [entry["file"] for entry in data["history"]] == ["piece.png"]
+
+
+class _RaisingHistory:
+    """A history double whose record always raises, to test the loop survives."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls = 0
+
+    def record(self, piece, shown_at) -> bool:
+        self.calls += 1
+        raise self._error
+
+
+def test_run_once_survives_history_write_error(caplog):
+    # A write failure (e.g. public/ not yet writable) must not stop the loop or
+    # the display push: run_once still returns normally and the panel is drawn.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=Path("piece.png"), title="Title", artist=None)
+    display = RecordingDisplay()
+
+    for error in (PermissionError("read-only"), OSError("disk full")):
+        history = _RaisingHistory(error)
+        state = AppState()
+        with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+            result = run_once(state, cfg, sources, display, NOON, history)
+        assert result is True
+        assert history.calls == 1
+        assert len(display.shown) >= 1
+        assert display.shown[-1].size == (WIDTH, HEIGHT)
+
+
+def test_run_once_history_write_error_logged_once_per_outage(caplog):
+    # The failure is logged on the state change into failure, not every cycle.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=Path("a.png"), title="A", artist=None)
+    display = RecordingDisplay()
+    history = _RaisingHistory(PermissionError("read-only"))
+    state = AppState()
+
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        for _ in range(3):
+            # A fresh piece each cycle so the art decision keeps trying to record.
+            sources.art_piece = replace(sources.art_piece, path=Path(f"{_}.png"))
+            run_once(state, cfg, sources, display, NOON, history)
+
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and r.name == "nightstand.app"
+    ]
+    assert len(warnings) == 1
 
 
 def test_run_once_renders_weather_in_morning_window():
@@ -324,7 +395,7 @@ class _SnapserverClient:
         raise httpx.ConnectError("unreachable")
 
 
-def test_live_sources_outage_logs_once_and_sets_stale(tmp_path, caplog):
+def test_live_sources_outage_logs_once(tmp_path, caplog):
     cfg = Config()
     status = json.loads(
         (FIXTURES / "snapserver" / "playing_airplay.json").read_text()
@@ -340,13 +411,12 @@ def test_live_sources_outage_logs_once_and_sets_stale(tmp_path, caplog):
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
 
-    health = sources.health()
-    assert health.stale_since == NOON
+    # A source outage is not a machine-health problem, so it draws no marker.
     # The health URLs are unreachable but only just now, so within the grace.
-    assert health.problems == ()
+    assert sources.health().problems == ()
 
 
-def test_live_sources_recovery_clears_stale(tmp_path):
+def test_live_sources_recovery_logs_once(tmp_path, caplog):
     cfg = Config()
     status = json.loads(
         (FIXTURES / "snapserver" / "playing_airplay.json").read_text()
@@ -356,12 +426,18 @@ def test_live_sources_recovery_clears_stale(tmp_path):
 
     client.fail = True
     assert sources.now_playing() is None
-    assert sources.health().stale_since == NOON
 
     client.fail = False
-    np = sources.now_playing()
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        np = sources.now_playing()
     assert np is not None and np.title
-    assert sources.health().stale_since is None
+
+    recovered = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO and "recovered" in r.getMessage()
+    ]
+    assert len(recovered) == 1
 
 
 def test_live_sources_forecast_disabled_without_coordinates(tmp_path):
