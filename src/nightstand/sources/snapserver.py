@@ -59,7 +59,7 @@ def parse_now_playing(status: dict) -> NowPlaying | None:
         if not rooms:
             return None
 
-        artist = ", ".join(metadata.get("artist", []))
+        artist = _artist(metadata.get("artist"))
         return NowPlaying(
             title=title,
             artist=artist,
@@ -69,6 +69,20 @@ def parse_now_playing(status: dict) -> NowPlaying | None:
         )
 
     return None
+
+
+def _artist(value: object) -> str:
+    """Coerce the ``artist`` metadata field to a display string.
+
+    Snapcast sends an array normally, but a sender may put a plain string or
+    ``null`` there. A list joins with ``", "``, a string passes through, and
+    anything else (``null`` included) becomes an empty string.
+    """
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, str):
+        return value
+    return ""
 
 
 def _rooms(stream_groups: list[dict]) -> tuple[str, ...]:

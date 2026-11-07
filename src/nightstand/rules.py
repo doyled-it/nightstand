@@ -86,7 +86,26 @@ def decide(now: datetime, cfg: Config, ctx: Context) -> Decision:
     Unknown names in ``schedule.priority`` are ignored: only ``morning``,
     ``music``, ``game``, and ``art`` are recognised, and the first whose
     condition holds wins. Nothing matching gives the placeholder.
+
+    One quiet-hours exception: during quiet hours every non-game screen is held
+    still by ``should_push``, so if the priority winner is not the game and a
+    game is on screen (live, or recently final), show the game instead. The game
+    is the one screen allowed to update overnight, so this keeps a live game
+    moving rather than freezing a non-game screen until morning. Outside quiet
+    hours the configured priority is unchanged.
     """
+    chosen = _by_priority(now, cfg, ctx)
+    if (
+        chosen.screen != "game"
+        and in_quiet_hours(now, cfg)
+        and ctx.game is not None
+        and _game_on_screen(ctx.game, now, cfg)
+    ):
+        return Decision("game", ("game",) + game_redraw_key(ctx.game))
+    return chosen
+
+
+def _by_priority(now: datetime, cfg: Config, ctx: Context) -> Decision:
     for name in cfg.schedule.priority:
         if name == "morning":
             if in_morning_window(now, cfg) and ctx.forecast is not None:

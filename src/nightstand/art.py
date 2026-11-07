@@ -44,7 +44,12 @@ class ArtLibrary:
         return [_piece_for(path) for path in files]
 
     def pick(self, now: datetime, rotate_minutes: int) -> ArtPiece | None:
-        """The piece to show at ``now``, stable within each rotation slot."""
+        """The piece to show at ``now``, stable within each rotation slot.
+
+        Walks the slot's shuffled order and returns the first piece whose image
+        decodes, so a corrupt file is skipped rather than blanking the slot.
+        Returns ``None`` only when the library is empty or nothing decodes.
+        """
         pieces = self.pieces()
         if not pieces:
             return None
@@ -53,7 +58,12 @@ class ArtLibrary:
         day = epoch_minutes // _MINUTES_PER_DAY
         order = list(pieces)
         Random(day).shuffle(order)
-        return order[slot % len(order)]
+        start = slot % len(order)
+        for offset in range(len(order)):
+            piece = order[(start + offset) % len(order)]
+            if load_piece_image(piece) is not None:
+                return piece
+        return None
 
 
 def art_slot(now: datetime, rotate_minutes: int) -> int:

@@ -198,6 +198,55 @@ def test_final_game_holds_for_an_hour_then_falls_to_art():
     assert rules.decide(now, cfg, stale).screen == "art"
 
 
+# --- quiet-hours game override ------------------------------------------------
+
+
+def test_quiet_hours_music_and_live_game_lets_the_game_push():
+    cfg = make_config()
+    now = la(2026, 11, 9, 22, 30)  # quiet hours.
+    ctx = Context(now_playing=a_track(), game=live_game())
+
+    decision = rules.decide(now, cfg, ctx)
+
+    assert decision.screen == "game"
+    assert rules.should_push(decision, None, now, cfg) is True
+
+
+def test_quiet_hours_music_and_final_game_in_hold_lets_the_game_push():
+    cfg = make_config()
+    now = la(2026, 11, 9, 22, 30)  # quiet hours.
+    ctx = Context(
+        now_playing=a_track(), game=final_game(now - timedelta(minutes=30))
+    )
+
+    decision = rules.decide(now, cfg, ctx)
+
+    assert decision.screen == "game"
+    assert rules.should_push(decision, None, now, cfg) is True
+
+
+def test_quiet_hours_music_and_no_game_pushes_nothing():
+    cfg = make_config()
+    now = la(2026, 11, 9, 22, 30)  # quiet hours.
+    ctx = Context(now_playing=a_track())
+
+    decision = rules.decide(now, cfg, ctx)
+
+    assert decision.screen == "now_playing"
+    assert rules.should_push(decision, None, now, cfg) is False
+
+
+def test_daytime_music_and_live_game_keeps_default_priority():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)  # afternoon: not quiet.
+    ctx = Context(now_playing=a_track(), game=live_game())
+
+    decision = rules.decide(now, cfg, ctx)
+
+    assert decision.screen == "now_playing"
+    assert rules.should_push(decision, None, now, cfg) is True
+
+
 # --- push gating --------------------------------------------------------------
 
 

@@ -96,3 +96,28 @@ def test_load_piece_image_reads_real_file(tmp_path):
 
 def test_empty_library_pick_is_none(tmp_path):
     assert ArtLibrary(tmp_path).pick(NOW, 60) is None
+
+
+def test_pick_skips_corrupt_piece_for_every_slot(tmp_path):
+    # One corrupt file among several good ones. pick must walk the slot's
+    # shuffled order past the corrupt file and return a readable piece for
+    # every slot of the day, never the broken one.
+    for i in range(5):
+        _write_image(tmp_path / f"good_{i}.png")
+    bad = tmp_path / "zbad.jpg"
+    bad.write_bytes(b"nope")
+    lib = ArtLibrary(tmp_path)
+
+    for slot in range(48):
+        now = NOW + timedelta(minutes=60 * slot)
+        piece = lib.pick(now, 60)
+        assert piece is not None
+        assert piece.path != bad
+        assert load_piece_image(piece) is not None
+
+
+def test_pick_returns_none_when_every_piece_is_corrupt(tmp_path):
+    for i in range(3):
+        (tmp_path / f"bad_{i}.jpg").write_bytes(b"nope")
+
+    assert ArtLibrary(tmp_path).pick(NOW, 60) is None
