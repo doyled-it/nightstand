@@ -38,6 +38,8 @@ from nightstand.screens import (
 )
 from nightstand.sources import mlb, snapserver
 from nightstand.sources import weather as weather_source
+from nightstand.sources.artsync import sync_art
+from nightstand.sources.museums import fetch_museum
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_preview(subparsers)
     _add_run(subparsers)
     _add_selftest(subparsers)
+    _add_art(subparsers)
 
     args = parser.parse_args(argv)
 
@@ -67,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run(args)
     if args.command == "selftest":
         return _selftest(args)
+    if args.command == "art":
+        return _run_art(args)
 
     config = load_config()
     print(f"nightstand {__version__}: hub {config.hub.host}")
@@ -95,6 +100,28 @@ def _add_selftest(subparsers: argparse._SubParsersAction) -> None:
     subparsers.add_parser(
         "selftest",
         help="render every screen from the bundled fixtures; non-zero on failure",
+    )
+
+
+def _add_art(subparsers: argparse._SubParsersAction) -> None:
+    art_cmd = subparsers.add_parser("art", help="manage the local art collection")
+    actions = art_cmd.add_subparsers(dest="action", required=True)
+
+    actions.add_parser("sync", help="mirror the hub's art share to the local cache")
+
+    fetch = actions.add_parser(
+        "fetch", help="download public-domain works from a museum open-access API"
+    )
+    fetch.add_argument("source", choices=("met", "aic"), help="which museum API")
+    fetch.add_argument("--query", required=True, help="search text")
+    fetch.add_argument(
+        "--limit", type=int, default=20, help="most works to fetch (default 20)"
+    )
+    fetch.add_argument(
+        "--dest",
+        type=Path,
+        required=True,
+        help="destination directory (e.g. the mounted art share); never the repo",
     )
 
 
@@ -309,6 +336,44 @@ def _run(args: argparse.Namespace) -> int:
     finally:
         client.close()
     return 0
+
+
+def _run_art(args: argparse.Namespace) -> int:
+    if args.action == "sync":
+        return _art_sync(args)
+    if args.action == "fetch":
+        return _art_fetch(args)
+    return 1
+
+
+def _art_sync(args: argparse.Namespace) -> int:
+    config = load_config()
+    base_url = _art_base_url(config)
+    dest = config.art.dir
+    with httpx.Client() as client:
+        result = sync_art(client, base_url, dest)
+    print(
+        f"art sync: +{result.added} added, {result.updated} updated, "
+        f"{result.removed} removed"
+    )
+    return 0
+
+
+def _art_fetch(args: argparse.Namespace) -> int:
+    with httpx.Client() as client:
+        result = fetch_museum(
+            client, args.source, args.query, args.dest, args.limit
+        )
+    print(f"art fetch: {result.written} written, {result.skipped} already present")
+    return 0
+
+
+def _art_base_url(config: Config) -> str:
+    """The hub's art listing URL, omitting the port when it is the default 80."""
+    host = config.hub.host
+    port = config.hub.http_port
+    authority = host if port == 80 else f"{host}:{port}"
+    return f"http://{authority}/art/"
 
 
 def _build_display(args: argparse.Namespace):

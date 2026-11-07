@@ -1,0 +1,17 @@
+[Unit]
+Description=nightstand bedside e-ink frame
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=nightstand
+Group=nightstand
+WorkingDirectory=/opt/nightstand
+# Run from the uv-synced venv built by the installer and the self-update timer.
+ExecStart=/opt/nightstand/.venv/bin/nightstand run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+#
+# nightstand self-update: fetch main, apply it, verify, and fall back on failure.
+#
+# The systemd timer runs this every 15 minutes. It keeps pi-bedroom on the newest
+# commit of main that passes `nightstand selftest` here, and never gets stuck on
+# a broken commit:
+#
+#   git fetch origin main      (on failure: write status, change nothing, exit 0)
+#   target = origin/main
+#   if target is the running commit, or a commit already known to fail here:
+#       write status, exit 0
+#   check out target; uv sync; nightstand selftest
+#   pass: target becomes last_good, restart the service, write status
+#   fail: record target as failed, check out last_good, uv sync, restart, write status
+#
+# State lives in NIGHTSTAND_STATE as two lines: last_good then failed (either may
+# be empty). The published status file (NIGHTSTAND_STATUS) follows the pinned
+# cross-repo schema so the room picker and the frame's own health marker see this
+# machine's health. NIGHTSTAND_REPO / _STATE / _STATUS / _SERVICE / _HOST are
+# overridable so the tests can drive the whole algorithm against a temp repo.
+#
+# This is the one place that writes status.json: no em dashes, no identifying
+# data; host is this machine's hostname, written on the device at runtime.
+
+set -euo pipefail
+
+# The update state lives in a root-owned directory (not the nightstand-owned
+# state/ the app writes), so only the self-updater can influence it. The status
+# file must live in the nginx-served public/ dir per the cross-repo contract.
+repo="${NIGHTSTAND_REPO:-/opt/nightstand}"
+state="${NIGHTSTAND_STATE:-/var/lib/nightstand/update/update.state}"
+status="${NIGHTSTAND_STATUS:-/var/lib/nightstand/public/status.json}"
+service="${NIGHTSTAND_SERVICE:-nightstand}"
+host="${NIGHTSTAND_HOST:-$(hostname)}"
+
+cd "$repo"
+
+# Only a full git object id is a trusted commit. The state file lives on the
+# device; validating what we read from it keeps a tampered file from steering a
+# checkout or landing a bogus value in the published status.
+is_sha() {
+  printf '%s' "$1" | grep -Eq '^[0-9a-f]{40}$'
+}
+
+# Trust the state file only when the updater itself owns its directory and the
+# file. install.sh keeps the update directory root-owned, so if either is owned
+# by another user the file has been tampered with and is treated as absent.
+state_dir="$(dirname "$state")"
+last_good=""
+failed=""
+if [ -f "$state" ] && [ -O "$state_dir" ] && [ -O "$state" ]; then
+  last_good="$(sed -n '1p' "$state")"
+  failed="$(sed -n '2p' "$state")"
+fi
+is_sha "$last_good" || last_good=""
+is_sha "$failed" || failed=""
+
+main_commit=""
+
+# Write a file atomically through a randomly named temp in the same directory,
+# at the given octal mode, then rename it into place. The destination directory
+# is root-owned (install.sh), so the temp cannot be redirected by a planted
+# symlink and the rename cannot be raced. mktemp creates the temp at 0600, so the
+# mode is set explicitly before the rename (nginx must read the status file).
+write_atomic() {
+  local target="$1"
+  local mode="$2"
+  local payload="$3"
+  local dir tmp
+  dir="$(dirname "$target")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "$dir/.ns.XXXXXX")"
+  printf '%s' "$payload" >"$tmp"
+  chmod "$mode" "$tmp"
+  mv "$tmp" "$target"
+}
+
+write_state() {
+  write_atomic "$state" 600 "$(printf '%s\n%s\n' "$last_good" "$failed")"
+}
+
+write_status() {
+  local verify="$1"
+  local commit checked_at payload
+  commit="$(git rev-parse HEAD)"
+  checked_at="$(date +%Y-%m-%dT%H:%M:%S%z)"
+  payload="$(printf '{\n  "host": "%s",\n  "repo": "nightstand",\n  "commit": "%s",\n  "main_commit": "%s",\n  "last_good": "%s",\n  "verify": "%s",\n  "checked_at": "%s"\n}\n' \
+    "$host" "$commit" "$main_commit" "$last_good" "$verify" "$checked_at")"
+  write_atomic "$status" 644 "$payload"
+}
+
+# Run the on-device self-test; echo "pass" or "fail" by its exit status.
+verify_word() {
+  if nightstand selftest >/dev/null 2>&1; then
+    echo pass
+  else
+    echo fail
+  fi
+}
+
+# A failed fetch (no network, origin unreachable) must change nothing. Report the
+# commit already running, using the last origin/main we have on hand.
+if ! git fetch origin main >/dev/null 2>&1; then
+  main_commit="$(git rev-parse origin/main 2>/dev/null || git rev-parse HEAD)"
+  write_status "$(verify_word)"
+  exit 0
+fi
+
+main_commit="$(git rev-parse origin/main)"
+head="$(git rev-parse HEAD)"
+
+# Nothing to do when main is already the running commit, or a commit we have
+# already seen fail here (do not retry it until main moves).
+if [ "$main_commit" = "$head" ] || { [ -n "$failed" ] && [ "$main_commit" = "$failed" ]; }; then
+  write_status "$(verify_word)"
+  exit 0
+fi
+
+# Try the target: check it out, sync deps, verify.
+git checkout --quiet "$main_commit"
+if uv sync --extra pi --frozen && nightstand selftest >/dev/null 2>&1; then
+  last_good="$main_commit"
+  failed=""
+  write_state
+  systemctl restart "$service"
+  write_status pass
+  exit 0
+fi
+
+# The target is bad. Record it so it is not retried until main moves.
+failed="$main_commit"
+write_state
+
+# With no earlier good commit there is nothing to fall back to: stay on the
+# target and report the failure.
+if [ -z "$last_good" ]; then
+  write_status fail
+  exit 1
+fi
+
+# Fall back to the last good commit, sync, and restart. Exit non-zero only if
+# even the fallback fails to verify, so the timer leaves a visible failure.
+git checkout --quiet "$last_good"
+uv sync --extra pi --frozen || true
+systemctl restart "$service"
+recovered="$(verify_word)"
+write_status "$recovered"
+[ "$recovered" = pass ]

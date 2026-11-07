@@ -259,3 +259,78 @@ def test_preview_game_succeeds_when_configured_cache_dir_is_unwritable(
     colors = rendered.getcolors(maxcolors=256)
     assert colors is not None
     assert {color for _, color in colors} <= set(PURE.values())
+
+
+def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_sync_art(client, base_url, dest):
+        captured["base_url"] = base_url
+        captured["dest"] = dest
+        from nightstand.sources.artsync import SyncResult
+
+        return SyncResult(added=2, updated=1, removed=0)
+
+    monkeypatch.setattr("nightstand.cli.sync_art", fake_sync_art)
+    config = tmp_path / "local.toml"
+    art_dir = tmp_path / "art"
+    config.write_text(
+        f'[hub]\nhost = "hub.example"\n[art]\ndir = "{art_dir}"\n'
+    )
+    monkeypatch.setenv("NIGHTSTAND_CONFIG", str(config))
+
+    code = main(["art", "sync"])
+
+    assert code == 0
+    assert captured["base_url"] == "http://hub.example/art/"
+    assert captured["dest"] == art_dir
+
+
+def test_art_sync_includes_non_default_http_port(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_sync_art(client, base_url, dest):
+        captured["base_url"] = base_url
+        from nightstand.sources.artsync import SyncResult
+
+        return SyncResult()
+
+    monkeypatch.setattr("nightstand.cli.sync_art", fake_sync_art)
+    config = tmp_path / "local.toml"
+    config.write_text('[hub]\nhost = "hub.example"\nhttp_port = 8080\n')
+    monkeypatch.setenv("NIGHTSTAND_CONFIG", str(config))
+
+    code = main(["art", "sync"])
+
+    assert code == 0
+    assert captured["base_url"] == "http://hub.example:8080/art/"
+
+
+def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_fetch(client, source, query, dest, limit):
+        captured.update(source=source, query=query, dest=dest, limit=limit)
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(written=3, skipped=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+    dest = tmp_path / "share"
+
+    code = main(
+        [
+            "art", "fetch", "met",
+            "--query", "sunset",
+            "--limit", "5",
+            "--dest", str(dest),
+        ]
+    )
+
+    assert code == 0
+    assert captured["source"] == "met"
+    assert captured["query"] == "sunset"
+    assert captured["dest"] == dest
+    assert captured["limit"] == 5
+
+

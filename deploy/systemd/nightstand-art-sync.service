@@ -1,0 +1,13 @@
+[Unit]
+Description=nightstand art sync (mirror the hub's art share)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=nightstand
+Group=nightstand
+WorkingDirectory=/opt/nightstand
+# Runs as the nightstand user, which owns the local art cache. An unreachable
+# hub leaves the cache untouched, so a failed run is harmless.
+ExecStart=/opt/nightstand/.venv/bin/nightstand art sync
