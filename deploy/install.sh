@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# nightstand installer for pi-bedroom. Run as root by the snaphouse bootstrap on
-# first install, and safe to re-run: every step is idempotent. After this the
+# nightstand installer for the bedside Pi (hostname `nightstand`). Run as root
+# by the snaphouse bootstrap on first install, and safe to re-run: every step
+# is idempotent. After this the
 # nightstand repo owns everything display-specific on the Pi (SPI/I2C, the inky
 # driver, the service, the self-update timer, and art sync).
 #

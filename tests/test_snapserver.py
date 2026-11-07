@@ -22,7 +22,7 @@ def test_parse_airplay_returns_title_artists_and_rooms():
     assert np.title == "Tidal Drift"
     assert np.artist == "Nova Reef, The Saltwater Choir"
     assert np.album == "Blue Hour"
-    assert np.art_url == "http://zimablade.local/art/blue-hour.jpg"
+    assert np.art_url == "http://house.local/art/blue-hour.jpg"
     assert np.rooms == ("Living room", "Bedroom")
 
 

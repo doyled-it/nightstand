@@ -1,5 +1,7 @@
 # nightstand Implementation Plan
 
+> Hostnames were renamed on 2026-11-06 (zimablade->house, pi-office->office, pi-bedroom->nightstand); this plan uses the original names.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Each task maps to one GitHub issue, one Orca worktree, and one PR.
 
 **Goal:** The bedside e-ink frame app: five screens rendered from live data, chosen by config-driven rules, previewable on a Mac, installed on `pi-bedroom` with self-update and art sync.

@@ -58,7 +58,7 @@
         }
       ],
       "server": {
-        "host": {"arch": "x86_64", "name": "zimablade", "os": "Debian"},
+        "host": {"arch": "x86_64", "name": "house", "os": "Debian"},
         "snapserver": {
           "name": "Snapserver",
           "version": "0.27.0",
@@ -90,7 +90,7 @@
               "title": "Tidal Drift",
               "artist": ["Nova Reef", "The Saltwater Choir"],
               "album": "Blue Hour",
-              "artUrl": "http://zimablade.local/art/blue-hour.jpg"
+              "artUrl": "http://house.local/art/blue-hour.jpg"
             }
           }
         },

@@ -25,7 +25,7 @@ def test_apply_without_health_returns_image_unchanged():
 
 
 def test_apply_draws_red_square_in_top_right_for_problems():
-    out = marker.apply(_blank(), Health(problems=("pi-office.local down",)))
+    out = marker.apply(_blank(), Health(problems=("office.local down",)))
 
     # A 14x14 red square sits 8 px in from the top-right corner.
     assert out.getpixel((WIDTH - 8 - 7, 8 + 7)) == PURE["red"]

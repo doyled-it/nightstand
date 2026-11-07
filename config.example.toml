@@ -10,7 +10,7 @@
 
 [hub]
 # The snaphouse hub that serves audio status and the art share.
-host = "zimablade.local"
+host = "house.local"
 snapserver_port = 1780
 http_port = 80
 
@@ -54,8 +54,8 @@ public = "/var/lib/nightstand/public"
 [health]
 # Status endpoints polled for the system-health marker.
 urls = [
-    "http://zimablade.local/status.json",
-    "http://pi-office.local/status.json",
-    "http://pi-bedroom.local/status.json",
-    "http://pi-bedroom.local/nightstand/status.json",
+    "http://house.local/status.json",
+    "http://office.local/status.json",
+    "http://nightstand.local/status.json",
+    "http://nightstand.local/nightstand/status.json",
 ]

@@ -76,7 +76,7 @@ def _env(bin_dir: Path, repo: Path, state: Path, status: Path, log: Path) -> dic
     env["NIGHTSTAND_STATE"] = str(state)
     env["NIGHTSTAND_STATUS"] = str(status)
     env["NIGHTSTAND_SERVICE"] = "nightstand"
-    env["NIGHTSTAND_HOST"] = "pi-bedroom"
+    env["NIGHTSTAND_HOST"] = "nightstand"
     env["SHIM_LOG"] = str(log)
     return env
 
@@ -157,7 +157,7 @@ def test_status_has_every_schema_field(tmp_path):
         "checked_at",
     }
     assert doc["repo"] == "nightstand"
-    assert doc["host"] == "pi-bedroom"
+    assert doc["host"] == "nightstand"
     assert doc["commit"] == a
     assert doc["main_commit"] == a
 

@@ -2,7 +2,7 @@
 #
 # nightstand self-update: fetch main, apply it, verify, and fall back on failure.
 #
-# The systemd timer runs this every 15 minutes. It keeps pi-bedroom on the newest
+# The systemd timer runs this every 15 minutes. It keeps the bedside Pi on the newest
 # commit of main that passes `nightstand selftest` here, and never gets stuck on
 # a broken commit:
 #
