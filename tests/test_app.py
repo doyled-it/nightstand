@@ -3,13 +3,21 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
 from PIL import Image
 
-from nightstand.app import AppState, LiveSources, run_forever, run_once
+from nightstand.app import (
+    AppState,
+    LiveSources,
+    feed_due,
+    forecast_due,
+    run_forever,
+    run_once,
+    schedule_due,
+)
 from nightstand.config import Config, Location, Schedule
 from nightstand.models import ArtPiece, Health, NowPlaying
 from nightstand.palette import PURE
@@ -307,3 +315,216 @@ def test_live_sources_forecast_disabled_without_coordinates(tmp_path):
     sources = LiveSources(cfg, _SnapserverClient({}), cache_dir=tmp_path)
 
     assert sources.forecast() is None
+
+
+# --- Polling policy (pure functions) ----------------------------------------
+
+
+def _policy_config() -> Config:
+    # Weekday morning window 06:00-08:30, in a fixed zone for determinism.
+    return Config(location=Location(timezone="UTC"))
+
+
+def test_forecast_due_only_from_30_minutes_before_the_window():
+    cfg = _policy_config()
+    day = datetime(2026, 11, 6, tzinfo=UTC)  # a Friday
+
+    before = day.replace(hour=5, minute=0)
+    lead = day.replace(hour=5, minute=30)
+    inside = day.replace(hour=7, minute=0)
+    at_end = day.replace(hour=8, minute=30)
+
+    assert forecast_due(before, cfg, None) is False
+    assert forecast_due(lead, cfg, None) is True
+    assert forecast_due(inside, cfg, None) is True
+    assert forecast_due(at_end, cfg, None) is False  # window end is exclusive
+
+
+def test_forecast_due_throttles_to_30_minutes_inside_the_window():
+    cfg = _policy_config()
+    seven = datetime(2026, 11, 6, 7, 0, tzinfo=UTC)
+
+    assert forecast_due(seven, cfg, seven - timedelta(minutes=10)) is False
+    assert forecast_due(seven, cfg, seven - timedelta(minutes=30)) is True
+
+
+def test_schedule_due_every_15_minutes_and_on_day_rollover():
+    base = datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
+    day = date(2026, 11, 6)
+
+    assert schedule_due(base, day, None, None) is True
+    assert schedule_due(base, day, base - timedelta(minutes=10), day) is False
+    assert schedule_due(base, day, base - timedelta(minutes=15), day) is True
+    # A new local day forces a poll even if the last was under 15 minutes ago.
+    midnight = datetime(2026, 11, 7, 0, 0, tzinfo=UTC)
+    assert schedule_due(
+        midnight, date(2026, 11, 7), midnight - timedelta(minutes=5), day
+    ) is True
+
+
+def test_feed_due_only_while_live():
+    live = mlb.parse_game(
+        json.loads((FIXTURES / "mlb" / "feed_scoring_play.json").read_text())
+    )
+    final = mlb.parse_game(
+        json.loads((FIXTURES / "mlb" / "feed_final.json").read_text())
+    )
+    assert live is not None and live.status == "live"
+    assert final is not None and final.status == "final"
+
+    assert feed_due(None) is True
+    assert feed_due(live) is True
+    assert feed_due(final) is False
+
+
+# --- Polling policy over a simulated day (counting real requests) -----------
+
+
+class _Clock:
+    def __init__(self, start: datetime) -> None:
+        self.now = start
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: int) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
+_FEED_PREFIX = "https://statsapi.mlb.com/api/v1.1/game/"
+
+_LIVE_SCHEDULE = {
+    "dates": [
+        {
+            "games": [
+                {
+                    "gamePk": 777,
+                    "status": {
+                        "abstractGameState": "Live",
+                        "detailedState": "In Progress",
+                    },
+                    "gameDate": "2026-11-06T18:00:00Z",
+                }
+            ]
+        }
+    ]
+}
+
+
+def _feed(state: str) -> dict:
+    return {
+        "gamePk": 777,
+        "gameData": {
+            "status": {"abstractGameState": state},
+            "teams": {
+                "away": {"id": 1, "abbreviation": "AWY"},
+                "home": {"id": 2, "abbreviation": "HOM"},
+            },
+            "datetime": {"dateTime": "2026-11-06T18:00:00Z"},
+        },
+        "liveData": {
+            "linescore": {
+                "currentInning": 3,
+                "inningState": "Top",
+                "teams": {"away": {"runs": 1}, "home": {"runs": 0}},
+                "innings": [
+                    {"num": 1, "away": {"runs": 0}, "home": {"runs": 0}},
+                    {"num": 2, "away": {"runs": 1}, "home": {"runs": 0}},
+                    {"num": 3, "away": {"runs": 0}, "home": {"runs": 0}},
+                ],
+            },
+            "plays": {"scoringPlays": [], "allPlays": []},
+        },
+    }
+
+
+class _CountingClient:
+    """Serves the forecast, MLB schedule, and feed; records each GET's time."""
+
+    def __init__(self, clock: _Clock, schedule: dict, *, feed_state: str = "Live"):
+        self._clock = clock
+        self._schedule = schedule
+        self.feed_state = feed_state
+        self.forecast_at: list[datetime] = []
+        self.schedule_at: list[datetime] = []
+        self.feed_at: list[datetime] = []
+        forecast_path = FIXTURES / "openmeteo" / "forecast.json"
+        self._forecast_payload = json.loads(forecast_path.read_text())
+
+    def get(self, url, params=None, timeout=None):
+        if url == _FORECAST_URL:
+            self.forecast_at.append(self._clock())
+            return _Response(self._forecast_payload)
+        if url == _SCHEDULE_URL:
+            self.schedule_at.append(self._clock())
+            return _Response(self._schedule)
+        if url.startswith(_FEED_PREFIX):
+            self.feed_at.append(self._clock())
+            return _Response(_feed(self.feed_state))
+        raise AssertionError(f"unexpected GET {url}")
+
+
+def _min_gap_minutes(times: list[datetime]) -> float:
+    gaps = [
+        (b - a).total_seconds() / 60 for a, b in zip(times, times[1:], strict=False)
+    ]
+    return min(gaps) if gaps else float("inf")
+
+
+def test_no_game_day_throttles_forecast_and_schedule(tmp_path):
+    clock = _Clock(datetime(2026, 11, 6, 0, 0, tzinfo=UTC))  # Friday 00:00
+    cfg = Config(
+        location=Location(latitude=32.7, longitude=-117.2, timezone="UTC"),
+    )
+    client = _CountingClient(clock, schedule={"dates": []})
+    sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=clock)
+
+    for _ in range(24 * 60):  # one cycle a minute for 24 hours
+        sources.forecast()
+        sources.game()
+        clock.advance(60)
+
+    # Open-Meteo is hit only inside the fetch span (05:30-08:30) and at most
+    # every 30 minutes.
+    assert client.forecast_at, "the forecast should be fetched in the morning"
+    for when in client.forecast_at:
+        minutes = when.hour * 60 + when.minute
+        assert 5 * 60 + 30 <= minutes < 8 * 60 + 30
+    assert _min_gap_minutes(client.forecast_at) >= 30
+
+    # The MLB schedule is polled at most every 15 minutes, and there is no game,
+    # so the live feed is never fetched.
+    assert _min_gap_minutes(client.schedule_at) >= 15
+    assert client.feed_at == []
+
+
+def test_live_game_fetches_feed_every_cycle_until_final(tmp_path):
+    clock = _Clock(datetime(2026, 11, 6, 18, 0, tzinfo=UTC))
+    cfg = Config(location=Location(timezone="UTC"))
+    client = _CountingClient(clock, schedule=_LIVE_SCHEDULE, feed_state="Live")
+    sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=clock)
+
+    # Five live cycles: the feed is fetched each time.
+    for _ in range(5):
+        state = sources.game()
+        assert state is not None and state.status == "live"
+        clock.advance(60)
+    assert len(client.feed_at) == 5
+
+    # The game ends. This cycle still fetches (and observes Final); later cycles
+    # must not fetch the feed again.
+    client.feed_state = "Final"
+    state = sources.game()
+    assert state is not None and state.status == "final"
+    assert len(client.feed_at) == 6
+
+    for _ in range(5):
+        clock.advance(60)
+        state = sources.game()
+        assert state is not None and state.status == "final"
+    assert len(client.feed_at) == 6  # no feed calls after Final
+
+    # The schedule itself was polled at most once (well under 15 minutes total).
+    assert len(client.schedule_at) == 1

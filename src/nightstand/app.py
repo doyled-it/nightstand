@@ -17,7 +17,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -47,9 +47,83 @@ logger = logging.getLogger(__name__)
 # anything to show, which in practice means the art folder is empty.
 _PLACEHOLDER_MESSAGE = "Add art to the share"
 
+# External-source polling policy. snapserver is on the LAN and polled every
+# cycle, but the MLB and Open-Meteo calls go out to the internet, so they are
+# throttled: the forecast only around the morning window, the MLB schedule a few
+# times an hour, and the live feed only while a game is actually in progress.
+_FORECAST_TTL = timedelta(minutes=30)
+_FORECAST_LEAD = timedelta(minutes=30)
+_SCHEDULE_TTL = timedelta(minutes=15)
+
 
 def _aware_now() -> datetime:
     return datetime.now().astimezone()
+
+
+def _local(now: datetime, cfg: Config) -> datetime:
+    """``now`` in the configured timezone, or the system zone when unset."""
+    tz = cfg.location.timezone
+    if tz is not None:
+        return now.astimezone(ZoneInfo(tz))
+    return now.astimezone()
+
+
+def _minutes(hhmm: str) -> int:
+    hours, mins = hhmm.split(":")
+    return int(hours) * 60 + int(mins)
+
+
+def _morning_window(now: datetime, cfg: Config) -> tuple[int, int]:
+    """The morning window for ``now``'s local day, as minutes past midnight."""
+    local = _local(now, cfg)
+    if local.weekday() < 5:
+        start, end = cfg.schedule.morning_weekday
+    else:
+        start, end = cfg.schedule.morning_weekend
+    return _minutes(start), _minutes(end)
+
+
+def forecast_due(now: datetime, cfg: Config, last_at: datetime | None) -> bool:
+    """Whether to fetch the forecast at ``now``.
+
+    Only inside the morning window or the 30 minutes before it starts, and then
+    at most once every 30 minutes (measured from the last successful fetch).
+    Outside that span the caller uses its cached value and makes no request.
+    """
+    start, end = _morning_window(now, cfg)
+    local = _local(now, cfg)
+    current = local.hour * 60 + local.minute
+    lead = int(_FORECAST_LEAD.total_seconds() // 60)
+    if not (start - lead <= current < end):
+        return False
+    return last_at is None or now - last_at >= _FORECAST_TTL
+
+
+def schedule_due(
+    now: datetime,
+    day: date,
+    last_at: datetime | None,
+    last_day: date | None,
+) -> bool:
+    """Whether to call ``find_game`` at ``now``.
+
+    At most once every 15 minutes, but always once when the local day rolls
+    over so a finished game does not linger on screen into the next day.
+    """
+    if last_at is None or last_day != day:
+        return True
+    return now - last_at >= _SCHEDULE_TTL
+
+
+def feed_due(state: GameState | None) -> bool:
+    """Whether to fetch the live feed, given the last known game state.
+
+    Fetch when there is no state yet (a game was just found) and every cycle
+    while it is live. Once it is final, stop: the cached final state is held.
+    """
+    if state is None:
+        return True
+    return state.status == "live"
 
 
 class Sources(Protocol):
@@ -92,6 +166,15 @@ class LiveSources:
         # URL was first unreachable (for the 15-minute grace).
         self._outages: dict[str, datetime] = {}
         self._unreachable: dict[str, datetime] = {}
+        # Throttled external polling: the last good forecast and when it was
+        # fetched; the cached schedule result (gamePk, possibly None) with the
+        # day and time it was polled; and the last parsed game state.
+        self._forecast_cache: Forecast | None = None
+        self._forecast_at: datetime | None = None
+        self._game_pk: int | None = None
+        self._schedule_at: datetime | None = None
+        self._schedule_day: date | None = None
+        self._game_state: GameState | None = None
 
     def now_playing(self) -> NowPlaying | None:
         return self._guard("now_playing", self._fetch_now_playing)
@@ -100,9 +183,43 @@ class LiveSources:
         return self._guard("cover", lambda: self._covers.for_track(np))
 
     def game(self) -> GameState | None:
-        return self._guard("game", self._fetch_game)
+        now = self._clock()
+        day = _local(now, self._cfg).date()
+
+        if schedule_due(now, day, self._schedule_at, self._schedule_day):
+            pk = self._guard(
+                "game",
+                lambda: mlb.find_game(self._client, self._cfg.game.team_id, day),
+            )
+            if "game" not in self._outages:
+                # A successful poll (``pk`` may legitimately be None for no game
+                # today). On failure we keep the old pk and retry next cycle.
+                if pk != self._game_pk:
+                    self._game_state = None
+                self._game_pk = pk
+                self._schedule_at = now
+                self._schedule_day = day
+
+        if self._game_pk is None:
+            self._clear_outage("game")
+            return None
+
+        if feed_due(self._game_state):
+            state = self._guard(
+                "game",
+                lambda: mlb.parse_game(mlb.fetch_feed(self._client, self._game_pk)),
+            )
+            if state is not None:
+                self._game_state = state
+        else:
+            # Final (or held): no feed call, so no outage to carry.
+            self._clear_outage("game")
+        return self._game_state
 
     def logo(self, team_id: int) -> Image.Image | None:
+        # cover and logo already swallow their own network errors and return
+        # None, so the guard here never fires: a missing cover or logo is a
+        # clean "nothing to draw" and deliberately does not feed the marker.
         return self._guard("logo", lambda: self._logos.for_team(team_id))
 
     def forecast(self) -> Forecast | None:
@@ -110,8 +227,22 @@ class LiveSources:
         if location.latitude is None or location.longitude is None:
             # Weather is off until the local config supplies coordinates; this
             # is a clean "nothing to show", not an outage.
+            self._clear_outage("forecast")
             return None
-        return self._guard("forecast", self._fetch_forecast)
+
+        now = self._clock()
+        if not forecast_due(now, self._cfg, self._forecast_at):
+            # Outside the span, or refreshed recently: serve the cache, no call.
+            self._clear_outage("forecast")
+            return self._forecast_cache
+
+        value = self._guard("forecast", self._fetch_forecast)
+        if value is not None:
+            # Advance the timer only on success, so a failed fetch retries next
+            # cycle rather than waiting out the TTL.
+            self._forecast_cache = value
+            self._forecast_at = now
+        return self._forecast_cache
 
     def art(self, now: datetime) -> ArtPiece | None:
         return self._guard(
@@ -137,14 +268,6 @@ class LiveSources:
         )
         return snapserver.parse_now_playing(status)
 
-    def _fetch_game(self) -> GameState | None:
-        pk = mlb.find_game(
-            self._client, self._cfg.game.team_id, self._local_now().date()
-        )
-        if pk is None:
-            return None
-        return mlb.parse_game(mlb.fetch_feed(self._client, pk))
-
     def _fetch_forecast(self) -> Forecast | None:
         location = self._cfg.location
         data = weather_source.fetch_forecast(
@@ -164,17 +287,15 @@ class LiveSources:
             logger.info("source %s recovered", name)
         return value
 
+    def _clear_outage(self, name: str) -> None:
+        # A source we deliberately did not poll this cycle (cache hit, out of
+        # window, no game) is not failing, so it must not feed ``stale_since``.
+        self._outages.pop(name, None)
+
     def _stale_since(self) -> datetime | None:
         if not self._outages:
             return None
         return min(self._outages.values())
-
-    def _local_now(self) -> datetime:
-        now = self._clock()
-        tz = self._cfg.location.timezone
-        if tz is not None:
-            return now.astimezone(ZoneInfo(tz))
-        return now.astimezone()
 
 
 @dataclass
