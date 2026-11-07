@@ -1,0 +1,14 @@
+[Unit]
+Description=nightstand self-update (fetch main, verify, fall back on failure)
+# Needs the network to fetch origin/main; a failed fetch is handled by the
+# script (it changes nothing and still writes status), so this is a preference.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nightstand
+# The script shells out to uv, nightstand and systemctl by name, so the venv and
+# uv live on PATH. It checks out commits and restarts the service, so it is root.
+Environment=PATH=/opt/nightstand/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/nightstand/deploy/update.sh

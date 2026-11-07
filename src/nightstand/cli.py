@@ -38,6 +38,7 @@ from nightstand.screens import (
 )
 from nightstand.sources import mlb, snapserver
 from nightstand.sources import weather as weather_source
+from nightstand.sources.artsync import sync_art
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_preview(subparsers)
     _add_run(subparsers)
     _add_selftest(subparsers)
+    _add_art(subparsers)
 
     args = parser.parse_args(argv)
 
@@ -67,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run(args)
     if args.command == "selftest":
         return _selftest(args)
+    if args.command == "art":
+        return _run_art(args)
 
     config = load_config()
     print(f"nightstand {__version__}: hub {config.hub.host}")
@@ -96,6 +100,13 @@ def _add_selftest(subparsers: argparse._SubParsersAction) -> None:
         "selftest",
         help="render every screen from the bundled fixtures; non-zero on failure",
     )
+
+
+def _add_art(subparsers: argparse._SubParsersAction) -> None:
+    art_cmd = subparsers.add_parser("art", help="manage the local art collection")
+    actions = art_cmd.add_subparsers(dest="action", required=True)
+
+    actions.add_parser("sync", help="mirror the hub's art share to the local cache")
 
 
 def _add_preview(subparsers: argparse._SubParsersAction) -> None:
@@ -309,6 +320,33 @@ def _run(args: argparse.Namespace) -> int:
     finally:
         client.close()
     return 0
+
+
+def _run_art(args: argparse.Namespace) -> int:
+    if args.action == "sync":
+        return _art_sync(args)
+    return 1
+
+
+def _art_sync(args: argparse.Namespace) -> int:
+    config = load_config()
+    base_url = _art_base_url(config)
+    dest = config.art.dir
+    with httpx.Client() as client:
+        result = sync_art(client, base_url, dest)
+    print(
+        f"art sync: +{result.added} added, {result.updated} updated, "
+        f"{result.removed} removed"
+    )
+    return 0
+
+
+def _art_base_url(config: Config) -> str:
+    """The hub's art listing URL, omitting the port when it is the default 80."""
+    host = config.hub.host
+    port = config.hub.http_port
+    authority = host if port == 80 else f"{host}:{port}"
+    return f"http://{authority}/art/"
 
 
 def _build_display(args: argparse.Namespace):

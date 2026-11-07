@@ -20,5 +20,9 @@ jobs:
       - name: Lint
         run: uv run ruff check
 
+      - name: Shellcheck deploy scripts
+        # shellcheck is preinstalled on the GitHub-hosted ubuntu runners.
+        run: shellcheck deploy/*.sh
+
       - name: Test
         run: uv run pytest
