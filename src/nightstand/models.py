@@ -16,12 +16,15 @@ from pathlib import Path
 class ArtPiece:
     """One image in the art library, with its caption.
 
-    ``artist`` is ``None`` when the caption has only a title.
+    ``artist`` is ``None`` when the caption has only a title. ``source_url`` is
+    the museum object page from the sidecar's optional third line, or ``None``
+    when the sidecar has no third line or it is not an https URL.
     """
 
     path: Path
     title: str
     artist: str | None = None
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,7 @@ from nightstand import rules
 from nightstand.art import ArtLibrary, load_piece_image
 from nightstand.config import Config
 from nightstand.display import Display, InkyDisplay
+from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
 from nightstand.screens import art as art_screen
 from nightstand.screens import game as game_screen
@@ -316,6 +317,7 @@ def run_once(
     sources: Sources,
     display: Display,
     now: datetime,
+    history: ArtHistory | None = None,
 ) -> bool:
     """Evaluate the rules once; push and return ``True`` only if it redrew."""
     np = sources.now_playing()
@@ -342,6 +344,12 @@ def run_once(
     image = marker.apply(image, health)
     display.show(image)
     state.last_key = key
+    if history is not None and decision.screen == "art" and art_piece is not None:
+        # ``pick`` already returned a piece whose image decodes, so an art
+        # decision means the art screen is what reached the panel. Record it;
+        # the history itself drops a piece that is already current, so a redraw
+        # under the same slot (a marker flip, say) does not add a duplicate.
+        history.record(art_piece, now)
     return True
 
 
@@ -362,9 +370,10 @@ def run_forever(
         sources = LiveSources(cfg, owned_client, cache_dir=cfg.paths.cache)
 
     state = AppState()
+    history = ArtHistory(cfg.paths.public / "art-history.json")
     try:
         while True:
-            run_once(state, cfg, sources, display, clock())
+            run_once(state, cfg, sources, display, clock(), history)
             sleep(cfg.schedule.check_seconds)
     finally:
         if owned_client is not None:

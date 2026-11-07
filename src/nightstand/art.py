@@ -2,7 +2,8 @@
 
 Images live in a folder synced from the hub's art share. Each image may have a
 sidecar caption file named ``<image file>.txt`` beside it (line 1 the title,
-line 2 the artist). Without one, the title falls back to the filename.
+line 2 the artist, optional line 3 the museum object page as an https URL).
+Without one, the title falls back to the filename.
 
 ``pick`` is deterministic: it maps the clock to a time slot and returns the same
 piece for the whole slot, stepping to the next piece when the slot changes. The
@@ -15,6 +16,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from random import Random
+from urllib.parse import urlparse
 
 from PIL import Image, UnidentifiedImageError
 
@@ -87,20 +89,30 @@ def load_piece_image(piece: ArtPiece) -> Image.Image | None:
 
 
 def _piece_for(path: Path) -> ArtPiece:
-    title, artist = _caption(path)
-    return ArtPiece(path=path, title=title, artist=artist)
+    title, artist, source_url = _caption(path)
+    return ArtPiece(path=path, title=title, artist=artist, source_url=source_url)
 
 
-def _caption(path: Path) -> tuple[str, str | None]:
+def _caption(path: Path) -> tuple[str, str | None, str | None]:
+    # Lines are positional: title, artist, source URL. Blank lines are kept so
+    # an empty artist does not shift the URL up into its place.
     sidecar = path.with_name(path.name + ".txt")
     if sidecar.is_file():
         lines = [line.strip() for line in sidecar.read_text().splitlines()]
-        lines = [line for line in lines if line]
-        if lines:
+        if lines and lines[0]:
             title = lines[0]
-            artist = lines[1] if len(lines) > 1 else None
-            return title, artist
-    return _title_from_filename(path), None
+            artist = lines[1] if len(lines) > 1 and lines[1] else None
+            source_url = _source_url(lines[2]) if len(lines) > 2 else None
+            return title, artist, source_url
+    return _title_from_filename(path), None, None
+
+
+def _source_url(value: str) -> str | None:
+    """The sidecar's third line as a source URL, kept only when it is https."""
+    parsed = urlparse(value)
+    if parsed.scheme == "https" and parsed.netloc:
+        return value
+    return None
 
 
 def _title_from_filename(path: Path) -> str:

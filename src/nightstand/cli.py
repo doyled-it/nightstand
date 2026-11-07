@@ -445,7 +445,7 @@ def _render_all_screens() -> None:
         _save(placeholder.render(_SELFTEST_MESSAGE), out / "placeholder.png")
 
         # Art is device-synced and not present here, so a solid image stands in
-        # to exercise the dither and caption path.
+        # to exercise the contain-fit and dither path.
         piece = ArtPiece(path=out / "art-src.png", title="Sample", artist="Artist")
         sample = Image.new("RGB", (400, 300), (0, 0, 255))
         _save(art.render(piece, sample), out / "art.png")
