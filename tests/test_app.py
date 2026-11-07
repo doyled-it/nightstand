@@ -243,12 +243,22 @@ def test_run_forever_runs_each_cycle_and_sleeps():
 class _Response:
     def __init__(self, payload: dict) -> None:
         self._payload = payload
+        self.request = httpx.Request("POST", "http://hub.local/jsonrpc")
 
     def raise_for_status(self) -> None:
         return None
 
     def json(self) -> dict:
         return self._payload
+
+    def iter_bytes(self):
+        yield json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
 
 
 class _SnapserverClient:
@@ -258,7 +268,7 @@ class _SnapserverClient:
         self.fail = True
         self._status = status
 
-    def post(self, url, json=None, timeout=None):
+    def stream(self, method, url, json=None, timeout=None):
         if self.fail:
             raise httpx.ConnectError("snapserver unreachable")
         return _Response(self._status)

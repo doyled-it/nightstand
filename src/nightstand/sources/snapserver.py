@@ -14,22 +14,58 @@ no title, there is nothing to show.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from nightstand.models import NowPlaying
 
 _TIMEOUT = 5.0
 
+# ``Server.GetStatus`` carries base64 cover art (``artData``) on every active
+# stream, so a normal body is several MB (seen at ~6.6 MB on the hub). Read up
+# to this cap so a runaway or hostile body cannot exhaust memory, but keep it
+# well above the real size so a genuine status is never rejected.
+_MAX_STATUS_BYTES = 16 * 1024 * 1024
+
 
 def fetch_status(client: httpx.Client, host: str, port: int) -> dict:
-    """Call ``Server.GetStatus`` on the hub and return the JSON-RPC ``result``."""
-    response = client.post(
+    """Call ``Server.GetStatus`` on the hub and return the JSON-RPC ``result``.
+
+    The body is read with a size cap and parsed leniently: real responses
+    contain raw control characters that a strict ``json.loads`` rejects. A body
+    that is too large, truncated, or otherwise unparseable raises
+    ``httpx.DecodingError``, the module's normal error type, so the app's guard
+    logs once and falls through to art instead of crashing the loop.
+    """
+    with client.stream(
+        "POST",
         f"http://{host}:{port}/jsonrpc",
         json={"id": 1, "jsonrpc": "2.0", "method": "Server.GetStatus"},
         timeout=_TIMEOUT,
-    )
-    response.raise_for_status()
-    return response.json()["result"]
+    ) as response:
+        response.raise_for_status()
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_bytes():
+            total += len(chunk)
+            if total > _MAX_STATUS_BYTES:
+                raise httpx.DecodingError(
+                    "Server.GetStatus body exceeded the size cap",
+                    request=response.request,
+                )
+            chunks.append(chunk)
+        request = response.request
+
+    text = b"".join(chunks).decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(text, strict=False)
+        return payload["result"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise httpx.DecodingError(
+            f"Server.GetStatus returned an unparseable body: {error}",
+            request=request,
+        ) from error
 
 
 def parse_now_playing(status: dict) -> NowPlaying | None:
