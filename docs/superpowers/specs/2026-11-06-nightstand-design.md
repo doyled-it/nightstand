@@ -30,8 +30,9 @@ Mockups (round three, approved as a starting point) were reviewed with the owner
 2026-11-06. Final tuning happens on the real panel. All screens favor few, large elements:
 the panel is about the size of a paperback.
 
-1. **Art.** A full-bleed image dithered to the six colors, with a black caption bar along
-   the bottom: title and artist. Rotates every hour.
+1. **Art.** A full-bleed image scaled to cover the panel (center-cropped) and dithered to
+   the six colors, no caption bar: the art shows alone and its history (title, artist,
+   museum link) is published off the panel. Rotates every hour.
 2. **Now playing.** Album art on the left (480x480) when available, otherwise text uses
    the full width. Title (largest), artist, album, and a row of chips naming the rooms
    currently playing.
