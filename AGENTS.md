@@ -64,6 +64,10 @@ identifying in any request (no name, email, address, or home location).
   key or account. Only city-level coordinates from the untracked local config go
   in the request, never the household's real location. The recorded fixture has
   its latitude, longitude, elevation, and timezone fields stripped.
+- The LAN status endpoints in `health.urls` (the hub and each Pi, e.g.
+  `http://<host>.local/status.json`): polled for the system-health marker. Each
+  serves the shared machine-status schema (see the hub's
+  `docs/cross-repo-features.md`). GET only, nothing identifying in the request.
 
 ## The six-color rule
 

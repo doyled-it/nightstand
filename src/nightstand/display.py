@@ -3,7 +3,9 @@
 ``FileDisplay`` writes the image to a PNG, the main way previews are built and
 tuned without hardware. With ``panel=True`` it first maps the pure colors to
 their muted panel look, so the preview reads like the reflective e-ink will.
-The real Pi driver (``InkyDisplay``) arrives with panel bring-up.
+``InkyDisplay`` drives the real panel through Pimoroni's ``inky`` library; it
+imports ``inky`` lazily so that importing nightstand on a Mac, where the
+library is never installed, never fails.
 """
 
 from __future__ import annotations
@@ -30,3 +32,22 @@ class FileDisplay:
     def show(self, img: Image.Image) -> None:
         out = simulate_panel(img) if self.panel else img
         out.save(self.path)
+
+
+class InkyDisplay:
+    """Push to the Inky Impression panel on the Pi.
+
+    The image is already reduced to the six pure panel colors, so the library
+    does no extra mapping: ``set_image`` then ``show`` paints it as given.
+    """
+
+    def __init__(self) -> None:
+        # Imported here, not at module load, so a Mac without the Pi-only
+        # ``inky`` extra can still import nightstand for previews and tests.
+        from inky.auto import auto
+
+        self._inky = auto()
+
+    def show(self, img: Image.Image) -> None:
+        self._inky.set_image(img)
+        self._inky.show()
