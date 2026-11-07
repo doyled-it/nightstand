@@ -391,7 +391,15 @@ def _art_fetch(args: argparse.Namespace) -> int:
         result = fetch_museum(
             client, args.source, args.query, args.dest, args.limit
         )
-    print(f"art fetch: {result.written} written, {result.skipped} already present")
+    failed = result.kept - result.written - result.skipped
+    summary = (
+        f"art fetch ({args.source} {args.query!r}): "
+        f"{result.found} found, {result.kept} public-domain, "
+        f"{result.written} written, {result.skipped} already present"
+    )
+    if failed > 0:
+        summary += f", {failed} failed to download"
+    print(summary)
     return 0
 
 

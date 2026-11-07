@@ -14,9 +14,11 @@ Two sources are supported:
   ``image_id``, and its full-size image comes from the IIIF endpoint.
 
 Each kept item is written as ``<source>-<id>.jpg`` with a sidecar
-``<source>-<id>.jpg.txt`` caption (line 1 title, line 2 artist), the same format
-the art library reads. An item whose image file already exists is skipped, so a
-rerun adds only what is new.
+``<source>-<id>.jpg.txt`` caption (line 1 title, line 2 artist, line 3 the https
+URL of the museum object page), the same format the art library reads. The URL
+line is optional; when it is present the artist line is always written (blank if
+unknown) so the URL stays on the third line. An item whose image file already
+exists is skipped, so a rerun adds only what is new.
 """
 
 from __future__ import annotations
@@ -40,10 +42,21 @@ _DEFAULT_LIMIT = 20
 # onto the device. Museum originals are large but comfortably under this.
 _MAX_BYTES = 64 * 1024 * 1024
 
-_MET_SEARCH = "https://collectionapi.metmuseum.org/public/collection/v1/search"
+# The Met retired the v1 search on 2026-10-01 (it now answers 410); search moved
+# to the Elastic-based v1.1 endpoint. There is no v1.1 object endpoint (it
+# answers 404), so object lookups stay on v1.
+_MET_SEARCH = "https://collectionapi.metmuseum.org/public/collection/v1.1/search"
 _MET_OBJECT = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{id}"
 _AIC_SEARCH = "https://api.artic.edu/api/v1/artworks/search"
 _AIC_IMAGE = "https://www.artic.edu/iiif/2/{image_id}/full/843,/0/default.jpg"
+
+# The Art Institute asks clients to identify themselves with an AIC-User-Agent
+# header carrying the app name and a contact URL (no email, per the privacy
+# rule). Its image CDN (Cloudflare) answers 403 to our "nightstand/<version>
+# (<repo>)" User-Agent, so AIC requests leave the User-Agent to httpx's library
+# default, which the CDN accepts. This was verified live against both the search
+# API and the IIIF image server. We do not spoof a browser string.
+_AIC_IDENTITY = "nightstand (https://github.com/doyled-it/nightstand)"
 
 # The URLs in a museum response steer where this helper connects. The Met serves
 # its images from one host, and an AIC image_id is a UUID; validate both before
@@ -57,20 +70,30 @@ _AIC_IMAGE_ID_RE = re.compile(
 
 @dataclass(frozen=True)
 class FetchResult:
-    """How many images the fetch wrote, and how many it skipped as present."""
+    """What one query found and did, so a "0 written" run is never silent.
 
+    ``found`` is the number of search hits the query matched, ``kept`` how many
+    were kept as public-domain works with a usable image (capped at the limit),
+    ``written`` how many images this run downloaded, and ``skipped`` how many
+    kept works were already on disk. A kept work that is neither written nor
+    skipped failed to download; its HTTP status is logged.
+    """
+
+    found: int = 0
+    kept: int = 0
     written: int = 0
     skipped: int = 0
 
 
 @dataclass(frozen=True)
 class _Item:
-    """One kept work: its output id, image URL, and caption."""
+    """One kept work: its output id, image URL, caption, and source page."""
 
     object_id: int
     image_url: str
     title: str
     artist: str
+    source_url: str = ""
 
 
 def fetch_museum(
@@ -83,9 +106,11 @@ def fetch_museum(
     """Fetch up to ``limit`` public-domain works for ``query`` into ``dest``."""
     dest = Path(dest)
     if source == "met":
-        items = _met_items(client, query, limit)
+        headers = _met_headers()
+        found, items = _met_items(client, query, limit, headers)
     elif source == "aic":
-        items = _aic_items(client, query, limit)
+        headers = _aic_headers()
+        found, items = _aic_items(client, query, limit, headers)
     else:
         raise ValueError(f"unknown museum source {source!r}; use 'met' or 'aic'")
 
@@ -97,20 +122,40 @@ def fetch_museum(
         if image_path.exists():
             skipped += 1
             continue
-        if _download(client, item.image_url, image_path):
-            _write_caption(image_path, item.title, item.artist)
+        if _download(client, item.image_url, image_path, headers):
+            _write_caption(image_path, item.title, item.artist, item.source_url)
             written += 1
-    return FetchResult(written=written, skipped=skipped)
+    return FetchResult(
+        found=found, kept=len(items), written=written, skipped=skipped
+    )
 
 
-def _met_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
-    search = _get_json(client, _MET_SEARCH, {"hasImages": "true", "q": query})
+def _met_headers() -> dict[str, str]:
+    """Headers for Met requests: our identifying User-Agent, which it accepts."""
+    return {"User-Agent": _user_agent()}
+
+
+def _aic_headers() -> dict[str, str]:
+    """Headers for AIC requests: the AIC-User-Agent identity, library-default UA.
+
+    The User-Agent is left unset so httpx sends its default; AIC's image CDN
+    rejects our "nightstand/<version> (<repo>)" User-Agent with 403.
+    """
+    return {"AIC-User-Agent": _AIC_IDENTITY}
+
+
+def _met_items(
+    client: httpx.Client, query: str, limit: int, headers: dict[str, str]
+) -> tuple[int, list[_Item]]:
+    search = _get_json(
+        client, _MET_SEARCH, {"hasImages": "true", "q": query}, headers
+    )
     object_ids = (search or {}).get("objectIDs") or []
     items: list[_Item] = []
     for object_id in object_ids:
         if len(items) >= limit:
             break
-        obj = _get_json(client, _MET_OBJECT.format(id=object_id), None)
+        obj = _get_json(client, _MET_OBJECT.format(id=object_id), None, headers)
         if obj is None:
             continue
         image = obj.get("primaryImage")
@@ -128,12 +173,15 @@ def _met_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
                 image_url=image,
                 title=str(obj.get("title") or ""),
                 artist=str(obj.get("artistDisplayName") or ""),
+                source_url=_https_or_empty(obj.get("objectURL")),
             )
         )
-    return items
+    return len(object_ids), items
 
 
-def _aic_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
+def _aic_items(
+    client: httpx.Client, query: str, limit: int, headers: dict[str, str]
+) -> tuple[int, list[_Item]]:
     search = _get_json(
         client,
         _AIC_SEARCH,
@@ -142,6 +190,7 @@ def _aic_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
             "fields": "id,title,artist_title,image_id,is_public_domain",
             "limit": limit,
         },
+        headers,
     )
     data = (search or {}).get("data") or []
     items: list[_Item] = []
@@ -156,24 +205,28 @@ def _aic_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
                 "skipping AIC item %s: image_id is not a UUID", entry.get("id")
             )
             continue
+        item_id = int(entry["id"])
         items.append(
             _Item(
-                object_id=int(entry["id"]),
+                object_id=item_id,
                 image_url=_AIC_IMAGE.format(image_id=image_id),
                 title=str(entry.get("title") or ""),
                 artist=str(entry.get("artist_title") or ""),
+                source_url=f"https://www.artic.edu/artworks/{item_id}",
             )
         )
-    return items
+    return len(data), items
 
 
-def _get_json(client: httpx.Client, url: str, params: dict | None) -> dict | None:
+def _get_json(
+    client: httpx.Client, url: str, params: dict | None, headers: dict[str, str]
+) -> dict | None:
     """GET ``url`` and return the parsed JSON object, or ``None`` on any failure."""
     try:
         response = client.get(
             url,
             params=params,
-            headers={"User-Agent": _user_agent()},
+            headers=headers,
             timeout=_TIMEOUT,
         )
     except httpx.HTTPError as error:
@@ -196,7 +249,20 @@ def _valid_met_image(url: str) -> bool:
     return parsed.scheme == "https" and parsed.hostname == _MET_IMAGE_HOST
 
 
-def _download(client: httpx.Client, url: str, dest: Path) -> bool:
+def _https_or_empty(value: object) -> str:
+    """``value`` when it is an https URL string, else an empty string.
+
+    The source page URL comes from the API response, so a non-https or
+    non-string value is dropped rather than written into the caption.
+    """
+    if isinstance(value, str) and urlparse(value).scheme == "https":
+        return value
+    return ""
+
+
+def _download(
+    client: httpx.Client, url: str, dest: Path, headers: dict[str, str]
+) -> bool:
     """Stream ``url`` to a temp file and rename it to ``dest``; skip on failure.
 
     The body is capped so a hostile or broken source cannot fill the disk, and it
@@ -204,13 +270,14 @@ def _download(client: httpx.Client, url: str, dest: Path) -> bool:
     usable image ever lands in the destination.
     """
     tmp = dest.with_name(dest.name + ".part")
+    # Refuse content-encoding so a small compressed body cannot amplify past the
+    # byte cap before it is written.
+    request_headers = {**headers, "Accept-Encoding": "identity"}
     try:
         with client.stream(
             "GET",
             url,
-            # Refuse content-encoding so a small compressed body cannot amplify
-            # past the byte cap before it is written.
-            headers={"User-Agent": _user_agent(), "Accept-Encoding": "identity"},
+            headers=request_headers,
             timeout=_TIMEOUT,
         ) as response:
             if response.status_code != 200:
@@ -263,9 +330,20 @@ def _is_image(path: Path) -> bool:
         return False
 
 
-def _write_caption(image_path: Path, title: str, artist: str) -> None:
+def _write_caption(
+    image_path: Path, title: str, artist: str, source_url: str
+) -> None:
+    """Write the sidecar: line 1 title, line 2 artist, line 3 source page URL.
+
+    When a source URL is present the artist line is always emitted (blank if
+    unknown) so the URL stays on the third line. With no URL the caption is the
+    title and, when known, the artist.
+    """
     sidecar = image_path.with_name(image_path.name + ".txt")
-    lines = [title] + ([artist] if artist else [])
+    if source_url:
+        lines = [title, artist, source_url]
+    else:
+        lines = [title] + ([artist] if artist else [])
     sidecar.write_text("\n".join(lines) + "\n")
 
 

@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "id": 28560,
+      "title": "The Bedroom",
+      "artist_title": "Vincent van Gogh",
+      "image_id": "6644829f-f292-c5c4-a73c-0356a6fdbf0d",
+      "is_public_domain": true
+    },
+    {
+      "id": 80607,
+      "title": "Self-Portrait",
+      "artist_title": "Vincent van Gogh",
+      "image_id": "47c5bcb8-62ef-e5d7-55e7-f5121f409a30",
+      "is_public_domain": true
+    },
+    {
+      "id": 14586,
+      "title": "The Poet's Garden",
+      "artist_title": "Vincent van Gogh",
+      "image_id": "fa5aaa98-8095-07d6-3b7d-3dfccc518191",
+      "is_public_domain": true
+    }
+  ]
+}
