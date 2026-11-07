@@ -68,6 +68,11 @@ identifying in any request (no name, email, address, or home location).
   `http://<host>.local/status.json`): polled for the system-health marker. Each
   serves the shared machine-status schema (see the hub's
   `docs/cross-repo-features.md`). GET only, nothing identifying in the request.
+- `collectionapi.metmuseum.org`, `api.artic.edu`, `www.artic.edu`: the museum
+  open-access APIs the `nightstand art fetch` helper reads to gather
+  public-domain works into the art share. Reached only by that hand-run helper,
+  never by the display loop. Keyless and public; the only request data is the
+  owner's search text, nothing identifying.
 
 ## The six-color rule
 

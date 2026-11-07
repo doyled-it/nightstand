@@ -39,6 +39,7 @@ from nightstand.screens import (
 from nightstand.sources import mlb, snapserver
 from nightstand.sources import weather as weather_source
 from nightstand.sources.artsync import sync_art
+from nightstand.sources.museums import fetch_museum
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,21 @@ def _add_art(subparsers: argparse._SubParsersAction) -> None:
     actions = art_cmd.add_subparsers(dest="action", required=True)
 
     actions.add_parser("sync", help="mirror the hub's art share to the local cache")
+
+    fetch = actions.add_parser(
+        "fetch", help="download public-domain works from a museum open-access API"
+    )
+    fetch.add_argument("source", choices=("met", "aic"), help="which museum API")
+    fetch.add_argument("--query", required=True, help="search text")
+    fetch.add_argument(
+        "--limit", type=int, default=20, help="most works to fetch (default 20)"
+    )
+    fetch.add_argument(
+        "--dest",
+        type=Path,
+        required=True,
+        help="destination directory (e.g. the mounted art share); never the repo",
+    )
 
 
 def _add_preview(subparsers: argparse._SubParsersAction) -> None:
@@ -325,6 +341,8 @@ def _run(args: argparse.Namespace) -> int:
 def _run_art(args: argparse.Namespace) -> int:
     if args.action == "sync":
         return _art_sync(args)
+    if args.action == "fetch":
+        return _art_fetch(args)
     return 1
 
 
@@ -338,6 +356,15 @@ def _art_sync(args: argparse.Namespace) -> int:
         f"art sync: +{result.added} added, {result.updated} updated, "
         f"{result.removed} removed"
     )
+    return 0
+
+
+def _art_fetch(args: argparse.Namespace) -> int:
+    with httpx.Client() as client:
+        result = fetch_museum(
+            client, args.source, args.query, args.dest, args.limit
+        )
+    print(f"art fetch: {result.written} written, {result.skipped} already present")
     return 0
 
 

@@ -306,3 +306,31 @@ def test_art_sync_includes_non_default_http_port(tmp_path, monkeypatch):
     assert captured["base_url"] == "http://hub.example:8080/art/"
 
 
+def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_fetch(client, source, query, dest, limit):
+        captured.update(source=source, query=query, dest=dest, limit=limit)
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(written=3, skipped=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+    dest = tmp_path / "share"
+
+    code = main(
+        [
+            "art", "fetch", "met",
+            "--query", "sunset",
+            "--limit", "5",
+            "--dest", str(dest),
+        ]
+    )
+
+    assert code == 0
+    assert captured["source"] == "met"
+    assert captured["query"] == "sunset"
+    assert captured["dest"] == dest
+    assert captured["limit"] == 5
+
+
