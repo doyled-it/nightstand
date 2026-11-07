@@ -347,8 +347,14 @@ def test_art_sync_includes_non_default_http_port(tmp_path, monkeypatch):
 def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_fetch(client, source, query, dest, limit):
-        captured.update(source=source, query=query, dest=dest, limit=limit)
+    def fake_fetch(client, source, query, dest, limit, min_aspect):
+        captured.update(
+            source=source,
+            query=query,
+            dest=dest,
+            limit=limit,
+            min_aspect=min_aspect,
+        )
         from nightstand.sources.museums import FetchResult
 
         return FetchResult(written=3, skipped=1)
@@ -370,5 +376,44 @@ def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
     assert captured["query"] == "sunset"
     assert captured["dest"] == dest
     assert captured["limit"] == 5
+    assert captured["min_aspect"] == 1.3  # the default
+
+
+def test_art_fetch_min_aspect_override(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_fetch(client, source, query, dest, limit, min_aspect):
+        captured.update(min_aspect=min_aspect)
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult()
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    code = main(
+        [
+            "art", "fetch", "aic",
+            "--query", "sea",
+            "--dest", str(tmp_path / "share"),
+            "--min-aspect", "1.6",
+        ]
+    )
+
+    assert code == 0
+    assert captured["min_aspect"] == 1.6
+
+
+def test_art_fetch_reports_shape_skips(tmp_path, monkeypatch, capsys):
+    def fake_fetch(client, source, query, dest, limit, min_aspect):
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(found=4, kept=3, written=1, skipped=0, skipped_shape=2)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    main(["art", "fetch", "met", "--query", "x", "--dest", str(tmp_path / "s")])
+
+    out = capsys.readouterr().out
+    assert "2 skipped (shape)" in out
 
 

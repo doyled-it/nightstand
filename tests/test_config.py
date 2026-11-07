@@ -15,6 +15,13 @@ def test_local_overrides_default(tmp_path):
     assert c.game.team_id == 135 and c.art.rotate_minutes == 60
 
 
+def test_art_min_aspect_default_and_override(tmp_path):
+    assert load_config().art.min_aspect == 1.3
+    p = tmp_path / "local.toml"
+    p.write_text("[art]\nmin_aspect = 1.6\n")
+    assert load_config(p).art.min_aspect == 1.6
+
+
 def test_missing_location_is_none():
     assert load_config(Path("/nonexistent")).location.latitude is None
 

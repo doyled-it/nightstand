@@ -18,9 +18,11 @@ _FIXTURES = Path(__file__).parent / "fixtures"
 AIC_IDENTITY = "nightstand (https://github.com/doyled-it/nightstand)"
 
 
-def _jpeg(color: tuple[int, int, int] = (20, 40, 60)) -> bytes:
+def _jpeg(
+    color: tuple[int, int, int] = (20, 40, 60), size: tuple[int, int] = (16, 8)
+) -> bytes:
     buf = io.BytesIO()
-    Image.new("RGB", (8, 8), color).save(buf, format="JPEG")
+    Image.new("RGB", size, color).save(buf, format="JPEG")
     return buf.getvalue()
 
 
@@ -307,6 +309,38 @@ def test_sidecar_keeps_the_url_on_line_three_when_artist_is_missing(tmp_path):
     assert (tmp_path / "aic-9.jpg.txt").read_text() == (
         "Untitled\n\nhttps://www.artic.edu/artworks/9\n"
     )
+
+
+def test_shape_skips_a_too_tall_image(tmp_path):
+    # A portrait image (aspect below the 1.3 default) is downloaded, found too
+    # tall, discarded, and counted under skipped_shape, not written.
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Tall", artist="A")},
+        image_body=_jpeg(size=(8, 16)),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path)
+
+    assert result.written == 0
+    assert result.skipped_shape == 1
+    assert result.kept == 1
+    # Nothing written and no stray .part file left behind.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_min_aspect_override_keeps_a_squarer_image(tmp_path):
+    # A square image is below the 1.3 default but kept when the caller lowers the
+    # minimum to 1.0.
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Square", artist="A")},
+        image_body=_jpeg(size=(8, 8)),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path, min_aspect=1.0)
+
+    assert result.written == 1
+    assert result.skipped_shape == 0
+    assert (tmp_path / "met-11.jpg").exists()
 
 
 def test_unknown_source_is_rejected(tmp_path):

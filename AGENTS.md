@@ -68,6 +68,15 @@ line 2 artist (may be empty), optional line 3 the museum object page as an
 `https` URL (ignored unless it parses as https). Without a sidecar the title
 falls back to the filename.
 
+Art shape: the display rotates only pieces at least `art.min_aspect` times wider
+than tall (default 1.3); narrower pieces stay in the share but are skipped.
+`ArtLibrary.pick` caches each image's aspect so the filter does not decode every
+image each cycle. The art screen cover-crops with a detail-aware window
+(`screens/common.detail_crop`) that slides the crop along the overflowing axis
+toward the busiest region, so a subject near an edge is not cut. The
+`nightstand art fetch` helper discards a downloaded work below `--min-aspect`
+(same 1.3 default) before writing it, counting it as "skipped (shape)".
+
 ## External hosts (allowlist)
 
 nightstand reaches only these hosts, all keyless public APIs or the LAN hub.

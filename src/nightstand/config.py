@@ -47,6 +47,9 @@ class Schedule:
 class Art:
     dir: Path = _STATE_ROOT / "art"
     rotate_minutes: int = 60
+    # Only rotate pieces at least this many times wider than tall. Narrower
+    # pieces stay in the share but are skipped, so the panel shows landscape art.
+    min_aspect: float = 1.3
 
 
 @dataclass(frozen=True)

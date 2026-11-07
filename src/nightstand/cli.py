@@ -134,6 +134,12 @@ def _add_art(subparsers: argparse._SubParsersAction) -> None:
         "--limit", type=int, default=20, help="most works to fetch (default 20)"
     )
     fetch.add_argument(
+        "--min-aspect",
+        type=float,
+        default=1.3,
+        help="discard works narrower than this width/height (default 1.3)",
+    )
+    fetch.add_argument(
         "--dest",
         type=Path,
         required=True,
@@ -250,7 +256,7 @@ def _preview_art(args: argparse.Namespace) -> int:
     at = datetime.fromisoformat(args.at) if args.at else datetime.now()
 
     library = ArtLibrary(args.art_dir)
-    piece = library.pick(at, config.art.rotate_minutes)
+    piece = library.pick(at, config.art.rotate_minutes, config.art.min_aspect)
 
     image = load_piece_image(piece) if piece is not None else None
     if piece is None or image is None:
@@ -389,14 +395,21 @@ def _art_sync(args: argparse.Namespace) -> int:
 def _art_fetch(args: argparse.Namespace) -> int:
     with httpx.Client() as client:
         result = fetch_museum(
-            client, args.source, args.query, args.dest, args.limit
+            client,
+            args.source,
+            args.query,
+            args.dest,
+            args.limit,
+            args.min_aspect,
         )
-    failed = result.kept - result.written - result.skipped
+    failed = result.kept - result.written - result.skipped - result.skipped_shape
     summary = (
         f"art fetch ({args.source} {args.query!r}): "
         f"{result.found} found, {result.kept} public-domain, "
         f"{result.written} written, {result.skipped} already present"
     )
+    if result.skipped_shape > 0:
+        summary += f", {result.skipped_shape} skipped (shape)"
     if failed > 0:
         summary += f", {failed} failed to download"
     print(summary)

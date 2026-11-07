@@ -247,7 +247,10 @@ class LiveSources:
 
     def art(self, now: datetime) -> ArtPiece | None:
         return self._guard(
-            "art", lambda: self._art.pick(now, self._cfg.art.rotate_minutes)
+            "art",
+            lambda: self._art.pick(
+                now, self._cfg.art.rotate_minutes, self._cfg.art.min_aspect
+            ),
         )
 
     def health(self) -> Health:
