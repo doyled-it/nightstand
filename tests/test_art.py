@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from PIL import Image
 
-from nightstand.art import ArtLibrary, load_piece_image
+from nightstand.art import ArtLibrary, art_slot, load_piece_image
 from nightstand.models import ArtPiece
 
 NOW = datetime(2026, 11, 6, 12, 0, 0)
+
+
+def test_art_slot_steps_once_per_rotation():
+    rotate = 60
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    base = art_slot(start, rotate)
+    assert art_slot(start + timedelta(minutes=59), rotate) == base
+    assert art_slot(start + timedelta(minutes=60), rotate) == base + 1
 
 
 def _write_image(path: Path, color: tuple[int, int, int] = (10, 20, 30)) -> None:
