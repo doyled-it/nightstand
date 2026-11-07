@@ -151,3 +151,85 @@ def test_history_without_list_recovers(tmp_path):
     history.record(_piece("a.jpg"), SHOWN)
 
     assert [entry["file"] for entry in _read(path)["history"]] == ["a.jpg"]
+
+
+def test_top_level_array_recovers(tmp_path):
+    # Valid JSON whose top level is a list, not an object: subscripting it would
+    # raise TypeError. It must be tolerated like any corrupt file.
+    path = tmp_path / "art-history.json"
+    path.write_text("[]")
+
+    history = ArtHistory(path)
+    history.record(_piece("a.jpg"), SHOWN)
+
+    assert [entry["file"] for entry in _read(path)["history"]] == ["a.jpg"]
+
+
+def test_top_level_number_recovers(tmp_path):
+    path = tmp_path / "art-history.json"
+    path.write_text("42")
+
+    history = ArtHistory(path)
+    history.record(_piece("a.jpg"), SHOWN)
+
+    assert [entry["file"] for entry in _read(path)["history"]] == ["a.jpg"]
+
+
+def test_history_string_value_recovers(tmp_path):
+    path = tmp_path / "art-history.json"
+    path.write_text(json.dumps({"history": "x"}))
+
+    history = ArtHistory(path)
+    history.record(_piece("a.jpg"), SHOWN)
+
+    assert [entry["file"] for entry in _read(path)["history"]] == ["a.jpg"]
+
+
+def test_entries_with_wrong_field_types_recover(tmp_path, caplog):
+    # A well-formed envelope whose entries have wrong field types (file is a
+    # number, shown_at missing) is structurally invalid: start fresh, one warning.
+    path = tmp_path / "art-history.json"
+    path.write_text(
+        json.dumps(
+            {
+                "current": None,
+                "history": [{"file": 123, "title": "a", "artist": None}],
+            }
+        )
+    )
+
+    with caplog.at_level("WARNING"):
+        history = ArtHistory(path)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+
+    history.record(_piece("a.jpg"), SHOWN)
+    assert [entry["file"] for entry in _read(path)["history"]] == ["a.jpg"]
+
+
+def test_non_dict_entries_recover(tmp_path):
+    path = tmp_path / "art-history.json"
+    path.write_text(json.dumps({"current": None, "history": [123, "foo"]}))
+
+    history = ArtHistory(path)
+    history.record(_piece("a.jpg"), SHOWN)
+
+    assert [entry["file"] for entry in _read(path)["history"]] == ["a.jpg"]
+
+
+def test_valid_file_reloads_all_entries(tmp_path):
+    # A well-formed file round-trips: a reopened history keeps its entries and
+    # still dedups against the current one.
+    path = tmp_path / "art-history.json"
+    first = ArtHistory(path)
+    first.record(_piece("a.jpg", artist="Alice"), SHOWN)
+    first.record(
+        _piece("b.jpg", artist=None, source_url="https://example.org/b"), SHOWN
+    )
+
+    reopened = ArtHistory(path)
+    added = reopened.record(_piece("b.jpg"), SHOWN)
+
+    assert added is False
+    assert [entry["file"] for entry in _read(path)["history"]] == ["b.jpg", "a.jpg"]

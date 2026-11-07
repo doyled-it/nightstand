@@ -65,13 +65,11 @@ class ArtHistory:
         if not self.path.is_file():
             return []
         try:
-            data = json.loads(self.path.read_text())
-            history = data["history"]
-            if not isinstance(history, list):
-                raise ValueError("history is not a list")
-            entries = [entry for entry in history if isinstance(entry, dict)]
-            return entries[: self._max]
-        except (OSError, ValueError, KeyError) as error:
+            return _parse(json.loads(self.path.read_text()))[: self._max]
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            # Any structurally invalid file (bad JSON, a non-object top level, a
+            # non-list history, or a malformed entry) is treated like a corrupt
+            # one: start fresh so a bad file can never crash the display loop.
             logger.warning("art history unreadable, starting fresh: %s", error)
             return []
 
@@ -96,6 +94,36 @@ class ArtHistory:
         except OSError:
             _unlink_quietly(tmp)
             raise
+
+
+def _parse(data: object) -> list[dict]:
+    """Validate a loaded history document, returning its entries newest-first.
+
+    Raises ``ValueError`` (or lets ``TypeError``/``KeyError`` propagate) for any
+    structural problem so the caller can treat it as a corrupt file.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("top level is not an object")
+    history = data["history"]
+    if not isinstance(history, list):
+        raise ValueError("history is not a list")
+    for entry in history:
+        if not _is_valid_entry(entry):
+            raise ValueError("history entry is malformed")
+    return history
+
+
+def _is_valid_entry(entry: object) -> bool:
+    """Whether ``entry`` is a well-formed Piece record from the contract."""
+    if not isinstance(entry, dict):
+        return False
+    required = ("file", "title", "shown_at")
+    if not all(isinstance(entry.get(key), str) for key in required):
+        return False
+    return all(
+        entry.get(key) is None or isinstance(entry.get(key), str)
+        for key in ("artist", "source_url")
+    )
 
 
 def _unlink_quietly(path: str) -> None:

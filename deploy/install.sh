@@ -168,7 +168,9 @@ make_dirs() {
   # follows a planted symlink) stays safe. The nightstand group gets write so
   # the app can publish art-history.json, and the sticky bit stops that
   # unprivileged user from deleting or replacing the root-written status.json.
-  # nginx reads both files by the world bit (0775 dir / 0644 files).
+  # nginx reads both files by the world bit (0775 dir / 0644 files). See the
+  # write_atomic comment in deploy/update.sh for why that root write stays safe
+  # in this group-writable directory.
   mkdir -p "$STATE_ROOT/public"
   chown root:nightstand "$STATE_ROOT/public"
   chmod 1775 "$STATE_ROOT/public"

@@ -63,9 +63,16 @@ is_sha "$failed" || failed=""
 main_commit=""
 
 # Write a file atomically through a randomly named temp in the same directory,
-# at the given octal mode, then rename it into place. The destination directory
-# is root-owned (install.sh), so the temp cannot be redirected by a planted
-# symlink and the rename cannot be raced. mktemp creates the temp at 0600, so the
+# at the given octal mode, then rename it into place. public/ is root:nightstand
+# 1775 (install.sh), group-writable by the unprivileged app so it can publish
+# art-history.json, so this root write of status.json no longer relies on the
+# directory being unwritable. It stays safe on three properties instead: the
+# parent state root is root-owned, so the public/ entry itself cannot be swapped
+# for a symlink to elsewhere; mktemp creates the temp with O_EXCL under a random
+# name, so the app user cannot pre-plant it; and rename replaces the destination
+# entry without following a symlink at the target, so the write cannot be
+# redirected. The sticky bit additionally stops the app user deleting or
+# renaming the root-written status.json. mktemp creates the temp at 0600, so the
 # mode is set explicitly before the rename (nginx must read the status file).
 write_atomic() {
   local target="$1"
