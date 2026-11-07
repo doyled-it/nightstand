@@ -14,7 +14,7 @@ from PIL import Image
 
 from nightstand.models import ArtPiece
 from nightstand.palette import dither_to_panel
-from nightstand.screens.common import HEIGHT, WIDTH, cover_crop
+from nightstand.screens.common import HEIGHT, WIDTH, detail_crop
 
 
 def render(piece: ArtPiece, image: Image.Image) -> Image.Image:
@@ -23,7 +23,9 @@ def render(piece: ArtPiece, image: Image.Image) -> Image.Image:
     # lives in the published history rather than on screen. The parameter stays
     # so every screen keeps the same ``render(model, image)`` shape.
     del piece
-    filled = cover_crop(image.convert("RGB"), WIDTH, HEIGHT)
+    # Detail-aware crop slides the window toward the busiest region so a subject
+    # near an edge is not cut; a centered image still crops centered.
+    filled = detail_crop(image.convert("RGB"), WIDTH, HEIGHT)
     # The dithered image is already the six pure panel colors, so the result is
     # panel-ready without a further snap.
     return dither_to_panel(filled)

@@ -38,6 +38,9 @@ check_seconds = 60
 # Local cache of the synced art collection, and how often art rotates.
 dir = "/var/lib/nightstand/art"
 rotate_minutes = 60
+# Only rotate pieces at least this many times wider than tall; narrower pieces
+# stay in the share but are skipped.
+min_aspect = 1.3
 
 [game]
 # MLB Stats API team id. 135 is the San Diego Padres.

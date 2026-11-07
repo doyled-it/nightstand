@@ -33,6 +33,10 @@ class ArtLibrary:
 
     def __init__(self, dir: Path) -> None:
         self.dir = Path(dir)
+        # Cache of each image's aspect, keyed by path and invalidated when the
+        # file's mtime or size changes, so pick does not decode every image on
+        # every cycle just to measure its shape.
+        self._aspect_cache: dict[Path, tuple[float, int, float]] = {}
 
     def pieces(self) -> list[ArtPiece]:
         """Every image in the folder, captioned, sorted by filename."""
@@ -45,12 +49,16 @@ class ArtLibrary:
         )
         return [_piece_for(path) for path in files]
 
-    def pick(self, now: datetime, rotate_minutes: int) -> ArtPiece | None:
+    def pick(
+        self, now: datetime, rotate_minutes: int, min_aspect: float = 0.0
+    ) -> ArtPiece | None:
         """The piece to show at ``now``, stable within each rotation slot.
 
-        Walks the slot's shuffled order and returns the first piece whose image
-        decodes, so a corrupt file is skipped rather than blanking the slot.
-        Returns ``None`` only when the library is empty or nothing decodes.
+        Walks the slot's shuffled order and returns the first piece that both
+        decodes and is at least ``min_aspect`` times wider than tall, so a
+        corrupt file or a too-tall piece is skipped rather than blanking the
+        slot. Returns ``None`` only when no piece qualifies, which the caller
+        shows as the placeholder.
         """
         pieces = self.pieces()
         if not pieces:
@@ -63,9 +71,35 @@ class ArtLibrary:
         start = slot % len(order)
         for offset in range(len(order)):
             piece = order[(start + offset) % len(order)]
-            if load_piece_image(piece) is not None:
+            aspect = self._aspect(piece)
+            if aspect is not None and aspect >= min_aspect:
                 return piece
         return None
+
+    def _aspect(self, piece: ArtPiece) -> float | None:
+        """The piece's width/height, cached, or ``None`` if it cannot be read.
+
+        The cache is keyed by the file's mtime and size, so a replaced image is
+        re-measured while an unchanged one is measured once. A file that fails
+        to decode returns ``None`` and is not cached, matching the corrupt-file
+        skip in ``pick``.
+        """
+        try:
+            stat = piece.path.stat()
+        except OSError:
+            return None
+        cached = self._aspect_cache.get(piece.path)
+        if cached is not None and cached[:2] == (stat.st_mtime, stat.st_size):
+            return cached[2]
+        image = load_piece_image(piece)
+        if image is None:
+            return None
+        width, height = image.size
+        if height == 0:
+            return None
+        aspect = width / height
+        self._aspect_cache[piece.path] = (stat.st_mtime, stat.st_size, aspect)
+        return aspect
 
 
 def art_slot(now: datetime, rotate_minutes: int) -> int:

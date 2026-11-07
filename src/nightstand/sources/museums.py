@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 30.0
 _DEFAULT_LIMIT = 20
+# Default minimum aspect (width/height). Works below this are portrait or near
+# square and read poorly on the landscape panel, so they are not kept. The CLI
+# can override it with --min-aspect.
+_DEFAULT_MIN_ASPECT = 1.3
 # Cap each image so a hostile or broken response cannot stream an unbounded body
 # onto the device. Museum originals are large but comfortably under this.
 _MAX_BYTES = 64 * 1024 * 1024
@@ -74,15 +78,17 @@ class FetchResult:
 
     ``found`` is the number of search hits the query matched, ``kept`` how many
     were kept as public-domain works with a usable image (capped at the limit),
-    ``written`` how many images this run downloaded, and ``skipped`` how many
-    kept works were already on disk. A kept work that is neither written nor
-    skipped failed to download; its HTTP status is logged.
+    ``written`` how many images this run downloaded, ``skipped`` how many kept
+    works were already on disk, and ``skipped_shape`` how many downloaded images
+    were discarded for being too tall. A kept work that is none of written,
+    skipped, or skipped_shape failed to download; its HTTP status is logged.
     """
 
     found: int = 0
     kept: int = 0
     written: int = 0
     skipped: int = 0
+    skipped_shape: int = 0
 
 
 @dataclass(frozen=True)
@@ -102,8 +108,13 @@ def fetch_museum(
     query: str,
     dest: Path,
     limit: int = _DEFAULT_LIMIT,
+    min_aspect: float = _DEFAULT_MIN_ASPECT,
 ) -> FetchResult:
-    """Fetch up to ``limit`` public-domain works for ``query`` into ``dest``."""
+    """Fetch up to ``limit`` public-domain works for ``query`` into ``dest``.
+
+    A downloaded image narrower than ``min_aspect`` (width/height) is discarded
+    and counted under ``skipped_shape``, so only landscape works reach the share.
+    """
     dest = Path(dest)
     if source == "met":
         headers = _met_headers()
@@ -117,16 +128,27 @@ def fetch_museum(
     dest.mkdir(parents=True, exist_ok=True)
     written = 0
     skipped = 0
+    skipped_shape = 0
     for item in items:
         image_path = dest / f"{source}-{item.object_id}.jpg"
         if image_path.exists():
             skipped += 1
             continue
-        if _download(client, item.image_url, image_path, headers):
-            _write_caption(image_path, item.title, item.artist, item.source_url)
-            written += 1
+        if not _download(client, item.image_url, image_path, headers):
+            continue
+        aspect = _image_aspect(image_path)
+        if aspect is None or aspect < min_aspect:
+            _unlink_quietly(image_path)
+            skipped_shape += 1
+            continue
+        _write_caption(image_path, item.title, item.artist, item.source_url)
+        written += 1
     return FetchResult(
-        found=found, kept=len(items), written=written, skipped=skipped
+        found=found,
+        kept=len(items),
+        written=written,
+        skipped=skipped,
+        skipped_shape=skipped_shape,
     )
 
 
@@ -328,6 +350,18 @@ def _is_image(path: Path) -> bool:
         return True
     except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
         return False
+
+
+def _image_aspect(path: Path) -> float | None:
+    """The image's width/height, or ``None`` if it cannot be read or is zero."""
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
+        return None
+    if height == 0:
+        return None
+    return width / height
 
 
 def _write_caption(
