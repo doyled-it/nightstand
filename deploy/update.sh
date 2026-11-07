@@ -25,13 +25,23 @@
 
 set -euo pipefail
 
+# The update state lives in a root-owned directory (not the nightstand-owned
+# state/ the app writes), so only the self-updater can influence it. The status
+# file must live in the nginx-served public/ dir per the cross-repo contract.
 repo="${NIGHTSTAND_REPO:-/opt/nightstand}"
-state="${NIGHTSTAND_STATE:-/var/lib/nightstand/state/update.state}"
+state="${NIGHTSTAND_STATE:-/var/lib/nightstand/update/update.state}"
 status="${NIGHTSTAND_STATUS:-/var/lib/nightstand/public/status.json}"
 service="${NIGHTSTAND_SERVICE:-nightstand}"
 host="${NIGHTSTAND_HOST:-$(hostname)}"
 
 cd "$repo"
+
+# Only a full git object id is a trusted commit. The state file lives on the
+# device; validating what we read from it keeps a tampered file from steering a
+# checkout or landing a bogus value in the published status.
+is_sha() {
+  printf '%s' "$1" | grep -Eq '^[0-9a-f]{40}$'
+}
 
 last_good=""
 failed=""
@@ -39,24 +49,38 @@ if [ -f "$state" ]; then
   last_good="$(sed -n '1p' "$state")"
   failed="$(sed -n '2p' "$state")"
 fi
+is_sha "$last_good" || last_good=""
+is_sha "$failed" || failed=""
 
 main_commit=""
 
+# Write a file atomically through a randomly named temp in the same directory.
+# mktemp creates the temp with O_EXCL, so a pre-planted symlink at a predictable
+# name cannot redirect the write, and the final rename replaces the destination
+# name itself rather than following a symlink planted there.
+write_atomic() {
+  local target="$1"
+  local payload="$2"
+  local dir tmp
+  dir="$(dirname "$target")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "$dir/.ns.XXXXXX")"
+  printf '%s' "$payload" >"$tmp"
+  mv "$tmp" "$target"
+}
+
 write_state() {
-  mkdir -p "$(dirname "$state")"
-  printf '%s\n%s\n' "$last_good" "$failed" >"$state.tmp"
-  mv "$state.tmp" "$state"
+  write_atomic "$state" "$(printf '%s\n%s\n' "$last_good" "$failed")"
 }
 
 write_status() {
   local verify="$1"
-  local commit checked_at
+  local commit checked_at payload
   commit="$(git rev-parse HEAD)"
   checked_at="$(date +%Y-%m-%dT%H:%M:%S%z)"
-  mkdir -p "$(dirname "$status")"
-  printf '{\n  "host": "%s",\n  "repo": "nightstand",\n  "commit": "%s",\n  "main_commit": "%s",\n  "last_good": "%s",\n  "verify": "%s",\n  "checked_at": "%s"\n}\n' \
-    "$host" "$commit" "$main_commit" "$last_good" "$verify" "$checked_at" >"$status.tmp"
-  mv "$status.tmp" "$status"
+  payload="$(printf '{\n  "host": "%s",\n  "repo": "nightstand",\n  "commit": "%s",\n  "main_commit": "%s",\n  "last_good": "%s",\n  "verify": "%s",\n  "checked_at": "%s"\n}\n' \
+    "$host" "$commit" "$main_commit" "$last_good" "$verify" "$checked_at")"
+  write_atomic "$status" "$payload"
 }
 
 # Run the on-device self-test; echo "pass" or "fail" by its exit status.

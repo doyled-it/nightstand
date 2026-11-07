@@ -119,10 +119,15 @@ seed_config() {
 
 make_dirs() {
   log "Creating the working directories under $STATE_ROOT"
+  # These are owned by the nightstand user: the app and art sync write them, and
+  # nginx serves public/.
   for sub in art cache state public; do
     mkdir -p "$STATE_ROOT/$sub"
+    chown nightstand:nightstand "$STATE_ROOT/$sub"
   done
-  chown -R nightstand:nightstand "$STATE_ROOT"
+  # The self-update state stays root-owned so an unprivileged user cannot steer
+  # which commit the root updater checks out.
+  mkdir -p "$STATE_ROOT/update"
 }
 
 install_units() {

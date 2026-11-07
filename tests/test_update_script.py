@@ -213,3 +213,47 @@ def test_unreachable_origin_changes_nothing_but_writes_status(tmp_path):
     doc = json.loads(status.read_text())
     assert doc["commit"] == a
     assert doc["verify"] == "pass"
+
+
+def test_status_write_does_not_follow_a_planted_symlink(tmp_path):
+    origin, a = _origin(tmp_path)
+    repo = _clone(origin, tmp_path / "repo")
+    bin_dir, state, status, log = _paths(tmp_path)
+    _make_shims(bin_dir, log)
+    env = _env(bin_dir, repo, state, status, log)
+
+    # An attacker who can write the (unprivileged) public dir plants symlinks at
+    # the status path and its once-predictable temp name, aimed at a root file.
+    canary = tmp_path / "canary"
+    canary.write_text("SECRET")
+    status.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(canary, status)
+    os.symlink(canary, status.with_name(status.name + ".tmp"))
+
+    result = _run_update(env)
+
+    assert result.returncode == 0, result.stderr
+    # The root-written status never clobbered the symlink target.
+    assert canary.read_text() == "SECRET"
+    doc = json.loads(status.read_text())
+    assert doc["commit"] == a
+
+
+def test_invalid_commit_ids_in_state_are_ignored(tmp_path):
+    origin, a = _origin(tmp_path)
+    repo = _clone(origin, tmp_path / "repo")
+    bin_dir, state, status, log = _paths(tmp_path)
+    _make_shims(bin_dir, log)
+    env = _env(bin_dir, repo, state, status, log)
+
+    # A tampered state file with non-sha values must not be trusted.
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("not-a-sha\n$(touch pwned)\n")
+
+    result = _run_update(env)
+
+    assert result.returncode == 0, result.stderr
+    assert not (repo / "pwned").exists()
+    doc = json.loads(status.read_text())
+    assert doc["last_good"] == ""
+    assert doc["commit"] == a

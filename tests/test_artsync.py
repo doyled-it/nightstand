@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 
+from nightstand.sources import artsync
 from nightstand.sources.artsync import SyncResult, sync_art
 
 BASE_URL = "http://hub.local/art/"
@@ -152,3 +153,64 @@ def test_creates_dest_when_missing(tmp_path):
 
     assert result == SyncResult(added=1, updated=0, removed=0)
     assert (dest / "one.jpg").read_bytes() == b"abc"
+
+
+def test_rejects_path_traversal_names(tmp_path):
+    listing = [
+        _entry("ok.jpg", MTIME_A, 3),
+        _entry("../evil.jpg", MTIME_A, 3),
+        _entry("sub/nested.jpg", MTIME_A, 3),
+        _entry("..", MTIME_A, 0),
+    ]
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/art/":
+            return httpx.Response(200, json=listing)
+        requested.append(request.url.path)
+        return httpx.Response(200, content=b"abc")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = sync_art(client, BASE_URL, tmp_path / "dest")
+
+    assert result.added == 1
+    assert (tmp_path / "dest" / "ok.jpg").exists()
+    # Nothing escaped the destination directory.
+    assert not (tmp_path / "evil.jpg").exists()
+    assert sorted(p.name for p in (tmp_path / "dest").iterdir()) == ["ok.jpg"]
+    # Only the safe name was ever requested; the traversing names were rejected.
+    assert requested == ["/art/ok.jpg"]
+
+
+def test_rejects_file_whose_declared_length_exceeds_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(artsync, "_MAX_FILE_BYTES", 4)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/art/":
+            return httpx.Response(200, json=[_entry("big.jpg", MTIME_A, 100)])
+        return httpx.Response(
+            200, content=b"x" * 100, headers={"content-length": "100"}
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = sync_art(client, BASE_URL, tmp_path)
+
+    assert result.added == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_stops_and_discards_a_stream_past_the_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(artsync, "_MAX_FILE_BYTES", 4)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/art/":
+            return httpx.Response(200, json=[_entry("big.jpg", MTIME_A, 3)])
+        # No content-length header, but the body is larger than the cap.
+        return httpx.Response(200, content=b"xxxxxxxx")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = sync_art(client, BASE_URL, tmp_path)
+
+    assert result.added == 0
+    # No stray .part file and nothing written.
+    assert list(tmp_path.iterdir()) == []

@@ -22,10 +22,13 @@ rerun adds only what is new.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
+from PIL import Image, UnidentifiedImageError
 
 from nightstand.sources.coverart import USER_AGENT
 
@@ -33,11 +36,23 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 30.0
 _DEFAULT_LIMIT = 20
+# Cap each image so a hostile or broken response cannot stream an unbounded body
+# onto the device. Museum originals are large but comfortably under this.
+_MAX_BYTES = 64 * 1024 * 1024
 
 _MET_SEARCH = "https://collectionapi.metmuseum.org/public/collection/v1/search"
 _MET_OBJECT = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{id}"
 _AIC_SEARCH = "https://api.artic.edu/api/v1/artworks/search"
 _AIC_IMAGE = "https://www.artic.edu/iiif/2/{image_id}/full/843,/0/default.jpg"
+
+# The URLs in a museum response steer where this helper connects. The Met serves
+# its images from one host, and an AIC image_id is a UUID; validate both before
+# fetching so a tampered response cannot redirect a request to an internal
+# address or inject path segments into the IIIF URL.
+_MET_IMAGE_HOST = "images.metmuseum.org"
+_AIC_IMAGE_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 @dataclass(frozen=True)
@@ -101,6 +116,12 @@ def _met_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
         image = obj.get("primaryImage")
         if not obj.get("isPublicDomain") or not image:
             continue
+        if not isinstance(image, str) or not _valid_met_image(image):
+            logger.warning(
+                "skipping Met object %s: image URL not on the trusted host",
+                object_id,
+            )
+            continue
         items.append(
             _Item(
                 object_id=int(obj.get("objectID", object_id)),
@@ -129,6 +150,11 @@ def _aic_items(client: httpx.Client, query: str, limit: int) -> list[_Item]:
             break
         image_id = entry.get("image_id")
         if not entry.get("is_public_domain") or not image_id:
+            continue
+        if not isinstance(image_id, str) or not _AIC_IMAGE_ID_RE.match(image_id):
+            logger.warning(
+                "skipping AIC item %s: image_id is not a UUID", entry.get("id")
+            )
             continue
         items.append(
             _Item(
@@ -164,25 +190,77 @@ def _get_json(client: httpx.Client, url: str, params: dict | None) -> dict | Non
     return data if isinstance(data, dict) else None
 
 
+def _valid_met_image(url: str) -> bool:
+    """Whether ``url`` is an https URL on the Met's trusted image host."""
+    parsed = urlparse(url)
+    return parsed.scheme == "https" and parsed.hostname == _MET_IMAGE_HOST
+
+
 def _download(client: httpx.Client, url: str, dest: Path) -> bool:
-    """Stream ``url`` to a temp file and rename it to ``dest``; skip on failure."""
+    """Stream ``url`` to a temp file and rename it to ``dest``; skip on failure.
+
+    The body is capped so a hostile or broken source cannot fill the disk, and it
+    is confirmed to decode as an image before it is renamed into place, so only a
+    usable image ever lands in the destination.
+    """
     tmp = dest.with_name(dest.name + ".part")
     try:
         with client.stream(
-            "GET", url, headers={"User-Agent": USER_AGENT}, timeout=_TIMEOUT
+            "GET",
+            url,
+            # Refuse content-encoding so a small compressed body cannot amplify
+            # past the byte cap before it is written.
+            headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"},
+            timeout=_TIMEOUT,
         ) as response:
             if response.status_code != 200:
                 logger.warning("image %s returned %s", url, response.status_code)
                 return False
+            if _declared_length(response) > _MAX_BYTES:
+                logger.warning("image %s declares too large a body", url)
+                return False
+            total = 0
+            exceeded = False
             with tmp.open("wb") as handle:
                 for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_BYTES:
+                        exceeded = True
+                        break
                     handle.write(chunk)
+            if exceeded:
+                logger.warning("image %s exceeded the %d byte cap", url, _MAX_BYTES)
+                _unlink_quietly(tmp)
+                return False
     except httpx.HTTPError as error:
         logger.warning("image download failed for %s: %s", url, error)
         _unlink_quietly(tmp)
         return False
+
+    if not _is_image(tmp):
+        logger.warning("image %s did not decode as an image", url)
+        _unlink_quietly(tmp)
+        return False
     tmp.replace(dest)
     return True
+
+
+def _declared_length(response: httpx.Response) -> int:
+    """The Content-Length header as an int, or 0 when absent or malformed."""
+    raw = response.headers.get("content-length")
+    if raw is None or not raw.isdigit():
+        return 0
+    return int(raw)
+
+
+def _is_image(path: Path) -> bool:
+    """Whether the file at ``path`` decodes as an image."""
+    try:
+        with Image.open(path) as image:
+            image.load()
+        return True
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
+        return False
 
 
 def _write_caption(image_path: Path, title: str, artist: str) -> None:
