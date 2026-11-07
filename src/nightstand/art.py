@@ -49,11 +49,21 @@ class ArtLibrary:
         if not pieces:
             return None
         epoch_minutes = int(now.timestamp()) // 60
-        slot = epoch_minutes // rotate_minutes
+        slot = art_slot(now, rotate_minutes)
         day = epoch_minutes // _MINUTES_PER_DAY
         order = list(pieces)
         Random(day).shuffle(order)
         return order[slot % len(order)]
+
+
+def art_slot(now: datetime, rotate_minutes: int) -> int:
+    """The rotation slot ``now`` falls in.
+
+    Buckets absolute epoch minutes, so it is independent of any timezone or DST
+    shift. ``pick`` and the rules engine's art redraw key share this helper so
+    the key always changes in step with the piece ``pick`` returns.
+    """
+    return int(now.timestamp()) // 60 // rotate_minutes
 
 
 def load_piece_image(piece: ArtPiece) -> Image.Image | None:
