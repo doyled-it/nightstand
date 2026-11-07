@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PIL import Image, ImageChops
 
 from nightstand.cli import main
+from nightstand.models import Health, NowPlaying
 from nightstand.palette import PURE
 from nightstand.screens import placeholder
 
@@ -109,6 +111,68 @@ def test_preview_game_renders_from_fixture(tmp_path, monkeypatch):
     colors = rendered.getcolors(maxcolors=256)
     assert colors is not None
     assert {color for _, color in colors} <= set(PURE.values())
+
+
+class _FakeSources:
+    """A ``Sources`` with music playing and no other data, for the run CLI."""
+
+    def now_playing(self):
+        return NowPlaying("Song", "Artist")
+
+    def cover(self, np):
+        return None
+
+    def game(self):
+        return None
+
+    def logo(self, team_id):
+        return None
+
+    def forecast(self):
+        return None
+
+    def art(self, now):
+        return None
+
+    def health(self):
+        return Health()
+
+
+def test_run_once_file_display_writes_png(tmp_path, monkeypatch):
+    # The quiet window [00:00, 00:00) never matches, so a single cycle always
+    # pushes regardless of the wall clock. The fake Sources avoids all I/O.
+    config = tmp_path / "local.toml"
+    config.write_text(
+        '[schedule]\nquiet_start = "00:00"\nquiet_end = "00:00"\n'
+        '[location]\ntimezone = "UTC"\n'
+    )
+    monkeypatch.setenv("NIGHTSTAND_CONFIG", str(config))
+    monkeypatch.setattr(
+        "nightstand.cli.LiveSources", lambda *a, **k: _FakeSources()
+    )
+    out = tmp_path / "frame.png"
+
+    code = main(["run", "--once", "--display", "file", "--out", str(out)])
+
+    assert code == 0
+    rendered = Image.open(out).convert("RGB")
+    assert rendered.size == (800, 480)
+
+
+def test_selftest_renders_all_screens_and_records_pass(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    config = tmp_path / "local.toml"
+    config.write_text(f'[paths]\nstate = "{state_dir}"\n')
+    monkeypatch.setenv("NIGHTSTAND_CONFIG", str(config))
+
+    code = main(["selftest"])
+
+    assert code == 0
+    marker = state_dir / "selftest.json"
+    assert marker.is_file()
+    recorded = json.loads(marker.read_text())
+    assert recorded["result"] == "pass"
+    assert recorded["checked_at"]
 
 
 def test_preview_weather_renders_from_fixture(tmp_path):

@@ -63,7 +63,9 @@ class Paths:
 
 
 @dataclass(frozen=True)
-class Health:
+class HealthConfig:
+    # Named ``HealthConfig`` (not ``Health``) so it never collides with
+    # ``models.Health``, the runtime health state the corner marker draws.
     urls: tuple[str, ...] = (
         "http://zimablade.local/status.json",
         "http://pi-office.local/status.json",
@@ -80,7 +82,7 @@ class Config:
     art: Art = field(default_factory=Art)
     game: Game = field(default_factory=Game)
     paths: Paths = field(default_factory=Paths)
-    health: Health = field(default_factory=Health)
+    health: HealthConfig = field(default_factory=HealthConfig)
 
 
 def load_config(path: Path | None = None) -> Config:
