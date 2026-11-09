@@ -9,7 +9,12 @@ import httpx
 import pytest
 from PIL import Image
 
-from nightstand.sources.museums import FetchResult, fetch_museum
+from nightstand.sources.museums import (
+    FetchResult,
+    _clean_title,
+    _write_caption,
+    fetch_museum,
+)
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -961,6 +966,126 @@ def test_commons_rejects_image_from_an_unexpected_host(tmp_path):
 
     assert result.written == 0
     assert commons.image_hits == []
+
+
+# --- title sanitizing (all sources) ---------------------------------------
+
+
+def test_clean_title_strips_multiline_html(tmp_path):
+    raw = (
+        '<div class="fn">\n'
+        '<div style="font-weight:bold;display:inline-block;">Der Kran</div>\n'
+        "</div>"
+    )
+    assert _clean_title(raw, tmp_path / "commons-1.jpg") == "Der Kran"
+
+
+def test_clean_title_strips_inline_tags_and_trailing_period(tmp_path):
+    raw = "<i>Windows Open Simultaneously 1st Part, 3rd Motif</i>."
+    assert _clean_title(raw, tmp_path / "commons-2.jpg") == (
+        "Windows Open Simultaneously 1st Part, 3rd Motif"
+    )
+
+
+def test_clean_title_unwraps_wikidata_without_english_label(tmp_path):
+    raw = (
+        'German: Leute, die sich begegnen title QS:P1476,de:"Leute, die sich '
+        'begegnen" label QS:Lde,"Leute, die sich begegnen"'
+    )
+    assert _clean_title(raw, tmp_path / "commons-3.jpg") == (
+        "Leute, die sich begegnen"
+    )
+
+
+def test_clean_title_prefers_the_english_wikidata_label(tmp_path):
+    raw = 'Landscape label QS:Lfr,"Paysage" label QS:Len,"Landscape"'
+    assert _clean_title(raw, tmp_path / "commons-4.jpg") == "Landscape"
+
+
+def test_clean_title_caps_on_a_word_boundary(tmp_path):
+    raw = "word " * 60  # 300 characters
+    cleaned = _clean_title(raw, tmp_path / "commons-5.jpg")
+    assert len(cleaned) <= 150
+    assert not cleaned.endswith(" ")
+    assert "word word" in cleaned
+
+
+def test_clean_title_falls_back_to_the_file_name(tmp_path):
+    raw = "<div></div>"  # nothing readable survives
+    assert _clean_title(raw, tmp_path / "commons-9.jpg") == "commons-9"
+
+
+def test_write_caption_never_emits_a_newline_inside_a_field(tmp_path):
+    image_path = tmp_path / "commons-7.jpg"
+    _write_caption(
+        image_path,
+        '<div class="fn">\nDer Kran\n</div>',
+        "Some\nArtist",
+        "https://commons.wikimedia.org/wiki/File:A.jpg",
+    )
+    lines = (tmp_path / "commons-7.jpg.txt").read_text().splitlines()
+    assert lines == [
+        "Der Kran",
+        "Some Artist",
+        "https://commons.wikimedia.org/wiki/File:A.jpg",
+    ]
+
+
+def test_commons_sanitizes_an_html_object_name(tmp_path):
+    members = [{"title": "File:Kran.jpg", "ns": 6}]
+    pages = {
+        "File:Kran.jpg": _commons_page(
+            8,
+            "File:Kran.jpg",
+            object_name='<div class="fn">\n<div>Der Kran</div>\n</div>',
+        )
+    }
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        fetch_museum(client, "commons", "Someone", tmp_path)
+
+    lines = (tmp_path / "commons-8.jpg.txt").read_text().splitlines()
+    assert lines[0] == "Der Kran"
+    assert len(lines) == 3  # title, artist, source URL, none split across lines
+
+
+def test_clean_title_keeps_a_balanced_closing_paren(tmp_path):
+    raw = "Windows Open Simultaneously (First Part, Third Motif)"
+    assert _clean_title(raw, tmp_path / "met-1.jpg") == raw
+
+
+def test_clean_title_keeps_closing_quotes_and_ellipsis(tmp_path):
+    for raw in ('"The Starry Night"', "Untitled..."):
+        assert _clean_title(raw, tmp_path / "met-2.jpg") == raw
+
+
+def test_clean_title_leaves_a_plain_met_title_unchanged(tmp_path):
+    raw = "Madame X (Madame Pierre Gautreau)"
+    assert _clean_title(raw, tmp_path / "met-3.jpg") == raw
+
+
+def test_clean_title_strips_one_trailing_period_but_not_an_ellipsis(tmp_path):
+    assert _clean_title("A Harvest.", tmp_path / "met-4.jpg") == "A Harvest"
+    assert _clean_title("A Harvest...", tmp_path / "met-5.jpg") == "A Harvest..."
+
+
+def test_clean_title_handles_a_long_run_of_angle_brackets_quickly(tmp_path):
+    import time
+
+    raw = "<" * 100_000 + "Real Title"
+    start = time.monotonic()
+    cleaned = _clean_title(raw, tmp_path / "commons-6.jpg")
+    assert time.monotonic() - start < 1.0
+    # The raw input is capped before processing, so a title past the cap is lost
+    # rather than left to do unbounded work; the point is it returns fast.
+    assert cleaned  # never empty
+
+
+def test_clean_title_keeps_prose_with_a_bare_less_than(tmp_path):
+    assert _clean_title("a < b", tmp_path / "commons-10.jpg") == "a < b"
+    assert _clean_title("A < B and C > D", tmp_path / "commons-11.jpg") == (
+        "A < B and C > D"
+    )
 
 
 # --- opt-in live smoke test, skipped unless NIGHTSTAND_LIVE_MUSEUMS is set ---

@@ -32,6 +32,7 @@ exists is skipped, so a rerun adds only what is new.
 
 from __future__ import annotations
 
+import html
 import logging
 import math
 import re
@@ -718,11 +719,105 @@ def _write_caption(
     title and, when known, the artist.
     """
     sidecar = image_path.with_name(image_path.name + ".txt")
+    title = _clean_title(title, image_path)
+    artist = _one_line(artist)
+    source_url = _one_line(source_url)
     if source_url:
         lines = [title, artist, source_url]
     else:
         lines = [title] + ([artist] if artist else [])
+    # Every field is collapsed to a single line, so the three-line caption
+    # format never shifts even if a source hands us multi-line text.
     sidecar.write_text("\n".join(lines) + "\n")
+
+
+def _one_line(value: str) -> str:
+    """Collapse all whitespace, including newlines, to single spaces."""
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+# Markers that introduce a Wikidata QuickStatements clause in an ObjectName.
+_WIKIDATA_MARKERS = (" title QS:", " label QS:")
+# Detects a Wikidata QuickStatements clause, so a bare "QS:" in prose does not
+# trigger the unwrap.
+_WIKIDATA_CLAUSE = re.compile(r"\b(?:label|title) QS:")
+# Matches a real HTML tag only: a "<" followed by a letter, "/", or "!" and no
+# nested angle bracket. Linear on long runs of stray "<", unlike "<[^>]+>".
+_HTML_TAG = re.compile(r"<[A-Za-z/!][^<>]*>")
+# How long a caption title may be before it is cut on a word boundary.
+_TITLE_MAX = 150
+# Upper bound on the raw text we process, so a pathological remote ObjectName
+# cannot make the cleaning do unbounded work before the length cap applies.
+_RAW_MAX = 10_000
+
+
+def _clean_title(raw: str, image_path: Path) -> str:
+    """A single clean caption title for any source.
+
+    Strips HTML, unescapes entities, unwraps Wikidata QuickStatements markup
+    (preferring the English label), collapses whitespace, trims a stray trailing
+    separator left by the markup, and caps the length on a word boundary. Falls
+    back to a title derived from the file name when nothing readable is left.
+    """
+    text = (raw or "")[:_RAW_MAX]
+    if _WIKIDATA_CLAUSE.search(text):
+        text = _wikidata_label(text)
+    text = _HTML_TAG.sub(" ", text)
+    text = html.unescape(text)
+    text = _one_line(text)
+    text = _trim_trailing_separator(text)
+    text = _cap_on_word_boundary(text, _TITLE_MAX)
+    if not text:
+        text = _title_from_filename(image_path)
+    return text
+
+
+def _trim_trailing_separator(text: str) -> str:
+    """Drop a single stray trailing separator left behind by markup removal.
+
+    Removes one trailing ``.``, ``,``, ``;`` or ``:`` (and any whitespace after
+    it), but keeps an ellipsis, a closing bracket, and a closing quote so a
+    clean Met or AIC title passes through unchanged.
+    """
+    text = text.rstrip()
+    if len(text) >= 2 and text[-1] in ".,;:" and text[-2] not in ".,;:":
+        text = text[:-1].rstrip()
+    return text
+
+
+def _wikidata_label(text: str) -> str:
+    """The best plain label from Wikidata QuickStatements markup.
+
+    Prefers the English label (``label QS:Len,"..."``); otherwise the text
+    before the first QuickStatements marker, with a leading ``Language:`` prefix
+    removed.
+    """
+    english = re.search(r'label QS:Len,"([^"]*)"', text)
+    if english:
+        return english.group(1)
+    cut = len(text)
+    for marker in _WIKIDATA_MARKERS:
+        found = text.find(marker)
+        if found != -1:
+            cut = min(cut, found)
+    head = text[:cut]
+    return re.sub(r"^[A-Za-z][A-Za-z ]*:\s+", "", head)
+
+
+def _cap_on_word_boundary(text: str, limit: int) -> str:
+    """``text`` cut to at most ``limit`` characters on a word boundary."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space > 0:
+        cut = cut[:space]
+    return cut.rstrip(" .,;:")
+
+
+def _title_from_filename(image_path: Path) -> str:
+    """A readable fallback title derived from the image file name."""
+    return image_path.stem.replace("_", " ").strip() or image_path.stem
 
 
 def _unlink_quietly(path: Path) -> None:
