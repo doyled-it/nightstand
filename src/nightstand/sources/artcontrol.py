@@ -38,10 +38,12 @@ _ACTIONS = ("next", "previous", "show")
 class ArtControl:
     """The rotation settings and last command from the hub's control file.
 
-    ``rotate_minutes`` and ``folders_enabled`` are the settings; ``seq``,
-    ``action``, and ``piece`` are the last command, all ``None`` when the hub has
-    issued no command yet. ``seq`` only increases, so a frame acts on a command
-    whose ``seq`` is greater than the last one it applied.
+    ``rotate_minutes``, ``folders_enabled``, and ``min_aspect`` are the settings;
+    ``seq``, ``action``, and ``piece`` are the last command, all ``None`` when the
+    hub has issued no command yet. ``seq`` only increases, so a frame acts on a
+    command whose ``seq`` is greater than the last one it applied. ``min_aspect``
+    is the rotation cutoff (the one source of truth for every frame) and is
+    ``None`` when the hub does not set one, so the frame keeps its local config.
     """
 
     rotate_minutes: int
@@ -49,6 +51,7 @@ class ArtControl:
     seq: int | None
     action: str | None
     piece: str | None
+    min_aspect: float | None = None
 
 
 def fetch_control(client: httpx.Client, host: str) -> ArtControl | None:
@@ -75,6 +78,9 @@ def fetch_control(client: httpx.Client, host: str) -> ArtControl | None:
         else ()
     )
 
+    raw_aspect = settings.get("min_aspect")
+    min_aspect = raw_aspect if _is_aspect(raw_aspect) else None
+
     seq, action, piece = _command(doc.get("command"))
     return ArtControl(
         rotate_minutes=rotate_minutes,
@@ -82,6 +88,7 @@ def fetch_control(client: httpx.Client, host: str) -> ArtControl | None:
         seq=seq,
         action=action,
         piece=piece,
+        min_aspect=min_aspect,
     )
 
 
@@ -103,6 +110,11 @@ def _command(command: object) -> tuple[int | None, str | None, str | None]:
 def _is_seq(value: object) -> bool:
     """Whether ``value`` is a usable command sequence number (an int, not a bool)."""
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_aspect(value: object) -> bool:
+    """Whether ``value`` is a usable aspect cutoff: a positive number, not a bool."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
 def _get(client: httpx.Client, host: str) -> object | None:

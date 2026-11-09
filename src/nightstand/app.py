@@ -13,7 +13,11 @@ redraw: it rides along with whatever redraw the rules already permit.
 
 from __future__ import annotations
 
+import io
+import json
 import logging
+import os
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -31,6 +35,7 @@ from nightstand.config import Config
 from nightstand.display import Display, InkyDisplay
 from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
+from nightstand.palette import simulate_panel
 from nightstand.rotation import Rotation
 from nightstand.screens import art as art_screen
 from nightstand.screens import game as game_screen
@@ -291,7 +296,12 @@ class LiveSources:
             if control is not None
             else self._cfg.art.rotate_minutes
         )
-        eligible = self._art.eligible(self._cfg.art.min_aspect)
+        # The hub's cutoff is the one source of truth for every frame; the local
+        # config is only the fallback when the hub does not set one.
+        min_aspect = self._cfg.art.min_aspect
+        if control is not None and control.min_aspect is not None:
+            min_aspect = control.min_aspect
+        eligible = self._art.eligible(min_aspect)
         forced = False
         if control is not None:
             forced = self._rotation.apply(control, eligible, now)
@@ -360,8 +370,9 @@ class AppState:
     ``LiveSources``, which is where the failing source calls are caught.)
 
     ``history_write_failing`` remembers whether the last art-history write
-    failed, so a persistent write outage is logged once (on the state change)
-    rather than on every cycle.
+    failed, and ``mirror_write_failing`` the same for the frame mirror, so a
+    persistent write outage is logged once (on the state change) rather than on
+    every cycle.
 
     ``shown_identity`` is the now-playing identity currently on the panel (or
     ``None`` for nothing playing); ``pending`` is the identity the settle is
@@ -376,6 +387,7 @@ class AppState:
 
     last_key: tuple | None = None
     history_write_failing: bool = False
+    mirror_write_failing: bool = False
     shown_identity: TrackKey | None = None
     pending: tuple[TrackKey | None, datetime] | None = None
     last_held: tuple | None = None
@@ -512,6 +524,7 @@ def run_once(
         _push_detail(decision.screen, np, art_piece),
         "forced" if decision.forced else "scheduled",
     )
+    _write_mirror(state, cfg.paths.public, image, decision.screen, now)
     state.last_key = key
     state.last_held = None
     state.shown_identity = identity
@@ -549,6 +562,62 @@ def _record_history(
     if state.history_write_failing:
         state.history_write_failing = False
         logger.info("art history write recovered")
+
+
+#: The mode the published mirror files carry, so nginx can serve them.
+_PUBLIC_FILE_MODE = 0o644
+
+
+def _write_mirror(
+    state: AppState, public: Path, image: Image.Image, screen: str, now: datetime
+) -> None:
+    """Publish the pushed image as the frame mirror, surviving any write failure.
+
+    After a successful push the frame writes ``frame.png`` (the pushed image
+    through ``simulate_panel``, so it reads like the reflective panel) and
+    ``frame.json`` (``{"updated_at", "screen"}``) into the public directory the
+    hub mirrors onto the room-picker page. The write can fail (the directory may
+    not be writable yet on a fresh boot); as with the art history that must never
+    stop the loop, so the error is swallowed and logged once per outage.
+    """
+    try:
+        _write_mirror_files(public, image, screen, now)
+    except OSError as error:
+        if not state.mirror_write_failing:
+            state.mirror_write_failing = True
+            logger.warning("frame mirror write failed: %s", error)
+        return
+    if state.mirror_write_failing:
+        state.mirror_write_failing = False
+        logger.info("frame mirror write recovered")
+
+
+def _write_mirror_files(
+    public: Path, image: Image.Image, screen: str, now: datetime
+) -> None:
+    """Atomically write ``frame.png`` and ``frame.json`` into ``public``."""
+    public.mkdir(parents=True, exist_ok=True)
+    buffer = io.BytesIO()
+    simulate_panel(image).save(buffer, format="PNG")
+    _atomic_write(public / "frame.png", buffer.getvalue())
+    meta = json.dumps({"updated_at": now.isoformat(), "screen": screen}, indent=2)
+    _atomic_write(public / "frame.json", (meta + "\n").encode("utf-8"))
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Write ``data`` to ``path`` via a temp file and rename, chmod 0644."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.chmod(tmp, _PUBLIC_FILE_MODE)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def run_forever(

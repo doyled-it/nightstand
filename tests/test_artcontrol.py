@@ -42,7 +42,49 @@ def test_parses_settings_and_a_command():
         seq=7,
         action="next",
         piece=None,
+        min_aspect=None,
     )
+
+
+def test_parses_min_aspect():
+    doc = {
+        "settings": {
+            "rotate_minutes": 60,
+            "folders_enabled": ["Collection"],
+            "min_aspect": 1.1,
+        }
+    }
+
+    with _client(lambda r: httpx.Response(200, json=doc)) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.min_aspect == 1.1
+
+
+def test_missing_min_aspect_is_none():
+    with _client(lambda r: httpx.Response(200, json=_control_doc())) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.min_aspect is None
+
+
+def test_bad_min_aspect_is_none():
+    # A non-positive or non-numeric value (or a bool) is dropped, so the frame
+    # falls back to its local config rather than a nonsense cutoff.
+    for bad in ("1.1", 0, -1, True, None):
+        doc = {
+            "settings": {
+                "rotate_minutes": 60,
+                "folders_enabled": ["Collection"],
+                "min_aspect": bad,
+            }
+        }
+        with _client(lambda r, doc=doc: httpx.Response(200, json=doc)) as client:
+            control = fetch_control(client, HOST)
+        assert control is not None
+        assert control.min_aspect is None
 
 
 def test_show_command_carries_the_piece_id():
