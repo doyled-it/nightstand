@@ -1113,3 +1113,201 @@ def test_live_game_fetches_feed_every_cycle_until_final(tmp_path):
 
     # The schedule itself was polled at most once (well under 15 minutes total).
     assert len(client.schedule_at) == 1
+
+
+def _held_records(caplog):
+    return [r for r in caplog.records if "redraw held" in r.message]
+
+
+def _pushed_records(caplog):
+    return [r for r in caplog.records if r.message.startswith("pushed ")]
+
+
+def test_push_logs_screen_detail_and_mode(caplog):
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    state = AppState(shown_identity=("Song", "Artist", None))
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is True
+
+    pushed = _pushed_records(caplog)
+    assert len(pushed) == 1
+    message = pushed[0].getMessage()
+    assert "now_playing" in message
+    assert "Song" in message
+    assert "scheduled" in message
+
+
+def test_forced_art_push_logs_forced_and_piece_id(tmp_path, caplog):
+    cfg = _loop_config()
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(
+        path=art_path, title="Title", artist="Artist", id="Photos/piece.png"
+    )
+    sources.art_forced = True
+    display = RecordingDisplay()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(AppState(), cfg, sources, display, NOON) is True
+
+    pushed = _pushed_records(caplog)
+    assert len(pushed) == 1
+    message = pushed[0].getMessage()
+    assert "art" in message
+    assert "Photos/piece.png" in message
+    assert "forced" in message
+
+
+def test_hold_for_settling_logs_once_per_change(caplog):
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        # A new track is held for the settle; repeated cycles must not re-log it.
+        for offset in (0, 5, 10):
+            when = NOON + timedelta(seconds=offset)
+            assert run_once(state, cfg, sources, display, when) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 1
+    assert "settling" in held[0].getMessage()
+    assert display.shown == []
+
+
+def test_hold_for_quiet_hours_logs_once(caplog):
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    # Already the shown identity, so the settle does not mask quiet-hours.
+    state = AppState(shown_identity=("Song", "Artist", None))
+
+    later = NOON + timedelta(seconds=10)
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        assert run_once(state, cfg, sources, display, later) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 1
+    assert "quiet hours" in held[0].getMessage()
+    assert display.shown == []
+
+
+def test_steady_state_logs_no_held_after_push(caplog):
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    state = AppState(shown_identity=("Song", "Artist", None))
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is True
+        # Nothing changed: no push, and no "held" spam either.
+        for offset in (10, 20):
+            when = NOON + timedelta(seconds=offset)
+            assert run_once(state, cfg, sources, display, when) is False
+
+    assert len(_pushed_records(caplog)) == 1
+    assert _held_records(caplog) == []
+
+
+def test_push_resets_held_so_the_same_hold_logs_again(tmp_path, caplog):
+    # A quiet-hours hold on a piece, a forced push of that same piece, then the
+    # same hold recurring (here via a health-marker flip, which changes the key
+    # but not the piece): the push must clear last_held so the hold logs afresh.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    piece = ArtPiece(path=art_path, title="Title", artist=None, id="met-1.jpg")
+    sources = FakeSources()
+    sources.art_piece = piece
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        # Held by quiet hours (first log).
+        assert run_once(state, cfg, sources, display, NOON) is False
+        # A command forces the same piece onto the panel: this push resets the
+        # held memory.
+        sources.art_forced = True
+        assert run_once(state, cfg, sources, display, NOON) is True
+        # Back to scheduled, and a health problem flips the marker so the key
+        # differs and the piece is held by quiet hours once more.
+        sources.art_forced = False
+        sources.health_obj = Health(problems=("nightstand",))
+        assert run_once(state, cfg, sources, display, NOON) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 2
+    assert all("quiet hours" in r.getMessage() for r in held)
+
+
+def test_held_dedupe_distinguishes_signatures(caplog):
+    # Two different tracks settling in a row log twice: the dedupe keys on the
+    # signature, not just the reason, so a constant signature would drop one.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song A", "Artist")
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        sources.np = NowPlaying("Song B", "Artist")
+        later = NOON + timedelta(seconds=5)
+        assert run_once(state, cfg, sources, display, later) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 2
+    assert all("settling" in r.getMessage() for r in held)
+
+
+def test_held_dedupe_distinguishes_reasons(caplog):
+    # The same track, first held for the settle and then (once settled) by quiet
+    # hours, logs both: the reason is part of the dedupe key.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        settled = NOON + timedelta(seconds=20)
+        assert run_once(state, cfg, sources, display, settled) is False
+
+    held = [r.getMessage() for r in _held_records(caplog)]
+    assert len(held) == 2
+    assert "settling" in held[0]
+    assert "quiet hours" in held[1]
+
+
+def test_quiet_hold_bucket_advance_logs_once(caplog):
+    # A long-form track held through quiet hours: its progress bucket advances,
+    # changing the redraw key, but the hold is on the track identity, so it is
+    # logged once, not on every bucket.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    lf = _long_form(position=0.0, position_at=NOON)
+    sources = FakeSources()
+    sources.np = lf
+    display = RecordingDisplay()
+    # Already the shown identity, so the settle does not mask the quiet hold.
+    state = AppState(shown_identity=(lf.title, lf.artist, lf.album))
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        # Eleven minutes later the 600 s bucket has advanced.
+        later = NOON + timedelta(minutes=11)
+        assert run_once(state, cfg, sources, display, later) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 1
+    assert "quiet hours" in held[0].getMessage()

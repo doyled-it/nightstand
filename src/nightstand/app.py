@@ -368,12 +368,17 @@ class AppState:
     waiting on and when it was first seen, or ``None`` when nothing is pending.
     Together they hold a changed identity off the panel until it has been stable
     for ``settle_seconds``.
+
+    ``last_held`` remembers the last held redraw already logged (its reason and
+    the changed decision), so a hold is logged once when it starts rather than on
+    every 10 s cycle; a push clears it so the next hold logs afresh.
     """
 
     last_key: tuple | None = None
     history_write_failing: bool = False
     shown_identity: TrackKey | None = None
     pending: tuple[TrackKey | None, datetime] | None = None
+    last_held: tuple | None = None
 
 
 def _settled(
@@ -394,6 +399,58 @@ def _settled(
         return False
     elapsed = (now - state.pending[1]).total_seconds()
     return elapsed >= cfg.schedule.settle_seconds
+
+
+def _push_detail(
+    screen: str, np: NowPlaying | None, art_piece: ArtPiece | None
+) -> str:
+    """A short identifier for the pushed screen: a piece id or a track title.
+
+    Returns a leading-space suffix for the push log (``" Photos/beach.jpg"``) or
+    an empty string when the screen has no obvious single identifier. Only data
+    the screens already show reaches the log.
+    """
+    if screen == "art" and art_piece is not None:
+        return f" {art_piece.id or art_piece.title}"
+    if screen in ("now_playing", "split") and np is not None:
+        return f" {np.title}"
+    return ""
+
+
+def _hold_signature(
+    screen: str,
+    np: NowPlaying | None,
+    art_piece: ArtPiece | None,
+    identity: TrackKey | None,
+) -> object:
+    """The stable identity of a held decision, for deduping the held log.
+
+    The art piece id or the now-playing identity, deliberately without the
+    progress bucket or health-marker bit that also ride in the redraw key. A
+    hold on the same piece or track is then logged once even as its bucket
+    advances or the marker flips through the night.
+    """
+    if screen == "art" and art_piece is not None:
+        return art_piece.id or art_piece.title
+    if screen in ("now_playing", "split"):
+        return identity
+    return None
+
+
+def _log_held(
+    state: AppState, reason: str, screen: str, signature: object
+) -> None:
+    """Log a held redraw once, when its reason, screen, or decision changes.
+
+    ``signature`` identifies the held decision (see ``_hold_signature``). While
+    it, ``reason``, and ``screen`` all stay the same the hold is not re-logged,
+    so a steady hold does not spam the log every cycle.
+    """
+    held = (reason, screen, signature)
+    if state.last_held == held:
+        return
+    state.last_held = held
+    logger.info("redraw held: %s (%s)", reason, screen)
 
 
 def run_once(
@@ -422,6 +479,8 @@ def run_once(
 
     identity = (np.title, np.artist, np.album) if np is not None else None
     if not _settled(state, identity, now, cfg):
+        # A changed identity is waiting out the settle, not yet on the panel.
+        _log_held(state, "settling", decision.screen, identity)
         return False
 
     health = sources.health()
@@ -430,6 +489,16 @@ def run_once(
 
     keyed = replace(decision, redraw_key=key)
     if not rules.should_push(keyed, state.last_key, now, cfg):
+        # should_push returns False either because nothing changed (key matches
+        # what is shown, nothing to log) or because a changed, unforced decision
+        # is held by quiet hours: that is the only other reason it declines here.
+        if key != state.last_key:
+            signature = _hold_signature(decision.screen, np, art_piece, identity)
+            _log_held(state, "quiet hours", decision.screen, signature)
+        else:
+            # Nothing is held this cycle, so forget any earlier hold: a later
+            # recurrence of it is a fresh hold and logs again.
+            state.last_held = None
         return False
 
     image = _render(
@@ -437,7 +506,14 @@ def run_once(
     )
     image = marker.apply(image, health)
     display.show(image)
+    logger.info(
+        "pushed %s%s (%s)",
+        decision.screen,
+        _push_detail(decision.screen, np, art_piece),
+        "forced" if decision.forced else "scheduled",
+    )
     state.last_key = key
+    state.last_held = None
     state.shown_identity = identity
     state.pending = None
     if decision.screen == "art" and art_piece is not None:
