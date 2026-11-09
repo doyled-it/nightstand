@@ -38,9 +38,20 @@ def test_missing_location_is_none():
 def test_defaults_without_path():
     c = load_config()
     assert c.hub.host == "house.local"
-    assert c.hub.snapserver_port == 1780
+    assert c.hub.http_port == 80
     assert c.schedule.priority == ("morning", "music", "game", "art")
     assert c.paths.cache == Path("/var/lib/nightstand/cache")
+
+
+def test_legacy_snapserver_port_is_ignored(tmp_path):
+    # The frame no longer talks to snapserver, so hub.snapserver_port is gone.
+    # Old local configs that still set it must keep loading: the unknown key is
+    # ignored and the rest of the [hub] section still applies.
+    p = tmp_path / "local.toml"
+    p.write_text('[hub]\nsnapserver_port = 1780\nhttp_port = 8080\n')
+    c = load_config(p)
+    assert c.hub.http_port == 8080
+    assert not hasattr(c.hub, "snapserver_port")
 
 
 def test_default_health_urls():

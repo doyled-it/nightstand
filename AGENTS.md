@@ -32,7 +32,7 @@ src/nightstand/
   text.py       font() loader and wrap() word wrapping
   cli.py        console entry point
   screens/      one module per screen (art, now_playing, game, ...)
-  sources/      one module per data source (snapserver, coverart, mlb, ...)
+  sources/      one module per data source (hubnowplaying, mlb, weather, ...)
   fonts/        bundled Inter TTFs and their license (OFL.txt)
 scripts/        developer tools (record_mlb_fixtures.py records game fixtures)
 tests/          pytest tests, one module per source module
@@ -84,10 +84,11 @@ Keep this list current when a data source is added, and send nothing
 identifying in any request (no name, email, address, or home location).
 
 - `house.local` (the hub): the now-playing file (`now-playing.json`), the cover
-  images it points to (same-origin `/cover/...` paths), the art share, and
-  snapserver JSON-RPC, all on the LAN. The hub resolves all artwork now, so the
-  frame does no album-cover lookup of its own (MusicBrainz and the Cover Art
-  Archive left this list).
+  images it points to (same-origin `/cover/...` paths), and the art share, all
+  on the LAN. The frame reads now-playing only from `now-playing.json`; it makes
+  no snapserver JSON-RPC call. The hub resolves all artwork now, so the frame
+  does no album-cover lookup of its own (MusicBrainz and the Cover Art Archive
+  left this list).
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot
   logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.
