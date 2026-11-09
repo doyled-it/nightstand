@@ -20,7 +20,6 @@ _STATE_ROOT = Path("/var/lib/nightstand")
 @dataclass(frozen=True)
 class Hub:
     host: str = "house.local"
-    snapserver_port: int = 1780
     http_port: int = 80
 
 
