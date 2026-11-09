@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 from dataclasses import replace
@@ -88,6 +89,18 @@ def _marker_present(img: Image.Image) -> bool:
     return img.convert("RGB").getpixel((WIDTH - 8 - 7, 8 + 7)) == PURE["red"]
 
 
+def _png_bytes(color: tuple[int, int, int] = (10, 20, 30)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _now_playing_doc() -> dict:
+    return json.loads(
+        (FIXTURES / "nowplaying" / "spec_example.json").read_text()
+    )
+
+
 def test_unchanged_world_pushes_once_across_three_cycles():
     cfg = _loop_config()
     sources = FakeSources()
@@ -154,10 +167,7 @@ def test_data_source_outage_draws_no_marker(tmp_path):
     # A stale data source (an outage within the health grace) is not a machine
     # health problem, so it must not draw the corner marker.
     cfg = Config(location=Location(timezone="UTC"))
-    status = json.loads(
-        (FIXTURES / "snapserver" / "playing_airplay.json").read_text()
-    )
-    client = _SnapserverClient(status)
+    client = _HubClient(_now_playing_doc())
     client.fail = True
     live = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
     display = RecordingDisplay()
@@ -378,29 +388,28 @@ class _Response:
         return False
 
 
-class _SnapserverClient:
-    """A fake client that fails or serves a recorded Server.GetStatus."""
+class _HubClient:
+    """A fake client that fails or serves the hub's now-playing.json over GET.
 
-    def __init__(self, status: dict) -> None:
+    Health polling and any other GET is unreachable but within the grace, so a
+    now-playing outage does not leak into the health marker.
+    """
+
+    def __init__(self, doc: dict) -> None:
         self.fail = True
-        self._status = status
-
-    def stream(self, method, url, json=None, timeout=None):
-        if self.fail:
-            raise httpx.ConnectError("snapserver unreachable")
-        return _Response(self._status)
+        self._doc = doc
 
     def get(self, url, params=None, timeout=None):
-        # Health polling and anything else: unreachable but within the grace.
+        if url.endswith("/now-playing.json"):
+            if self.fail:
+                raise httpx.ConnectError("hub unreachable")
+            return _Response(self._doc)
         raise httpx.ConnectError("unreachable")
 
 
 def test_live_sources_outage_logs_once(tmp_path, caplog):
     cfg = Config()
-    status = json.loads(
-        (FIXTURES / "snapserver" / "playing_airplay.json").read_text()
-    )
-    client = _SnapserverClient(status)
+    client = _HubClient(_now_playing_doc())
     client.fail = True
     sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
 
@@ -418,10 +427,7 @@ def test_live_sources_outage_logs_once(tmp_path, caplog):
 
 def test_live_sources_recovery_logs_once(tmp_path, caplog):
     cfg = Config()
-    status = json.loads(
-        (FIXTURES / "snapserver" / "playing_airplay.json").read_text()
-    )
-    client = _SnapserverClient(status)
+    client = _HubClient(_now_playing_doc())
     sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
 
     client.fail = True
@@ -440,11 +446,77 @@ def test_live_sources_recovery_logs_once(tmp_path, caplog):
     assert len(recovered) == 1
 
 
+def test_live_sources_now_playing_and_cover_from_hub(tmp_path):
+    doc = _now_playing_doc()
+    cover = _png_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/now-playing.json":
+            return httpx.Response(200, json=doc)
+        if request.url.path == "/cover/3f2a9b7c.jpg":
+            return httpx.Response(200, content=cover)
+        raise AssertionError(f"unexpected request {request.url}")
+
+    cfg = Config(location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+        np = sources.now_playing()
+        assert np is not None
+        assert np.title.startswith("Episode 412")
+        assert np.kind == "long_form"
+        assert np.rooms == ("Bedroom", "Office")
+        image = sources.cover(np)
+        assert isinstance(image, Image.Image)
+
+
+def test_live_sources_malformed_now_playing_degrades_to_none(tmp_path):
+    # Review Focus 3: a malformed now-playing.json means nothing playing, never
+    # a crash or stale data.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/now-playing.json":
+            return httpx.Response(200, content=b"<html>broken</html>")
+        raise httpx.ConnectError("unreachable")
+
+    cfg = Config(location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+        assert sources.now_playing() is None
+
+
+def test_live_sources_missing_now_playing_file_degrades_to_none(tmp_path):
+    # An old hub or a service that has not written the file yet (404) is also
+    # nothing playing.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/now-playing.json":
+            return httpx.Response(404)
+        raise httpx.ConnectError("unreachable")
+
+    cfg = Config(location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+        assert sources.now_playing() is None
+
+
+def test_live_sources_empty_rooms_is_nothing_playing(tmp_path):
+    # The hub still publishes a track whose rooms are all muted; the frame treats
+    # an empty rooms list as nothing playing.
+    doc = _now_playing_doc()
+    doc["rooms"] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=doc)
+
+    cfg = Config(location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+        assert sources.now_playing() is None
+
+
 def test_live_sources_forecast_disabled_without_coordinates(tmp_path):
     # Default config leaves coordinates unset, so the forecast is off and no
     # request is attempted (a request would raise on this fake client).
     cfg = Config()
-    sources = LiveSources(cfg, _SnapserverClient({}), cache_dir=tmp_path)
+    sources = LiveSources(cfg, _HubClient({}), cache_dir=tmp_path)
 
     assert sources.forecast() is None
 

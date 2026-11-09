@@ -31,8 +31,9 @@ morning_weekday = ["06:00", "08:30"]
 morning_weekend = ["07:00", "09:00"]
 # Screen priority, highest first.
 priority = ["morning", "music", "game", "art"]
-# How often the loop re-evaluates the rules, in seconds.
-check_seconds = 60
+# How often the loop re-evaluates the rules, in seconds. now-playing.json is a
+# small LAN file read each cycle, so a short interval keeps progress current.
+check_seconds = 10
 
 [art]
 # Local cache of the synced art collection, and how often art rotates.

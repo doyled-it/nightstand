@@ -8,6 +8,7 @@ as later tasks land.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -30,9 +31,17 @@ class ArtPiece:
 class NowPlaying:
     """The current track and where it is playing.
 
-    ``album`` and ``art_url`` are ``None`` when the sender did not supply them
-    (Bluetooth, for example, sends no cover art). ``rooms`` names the unmuted
-    rooms the track is playing in, in the order the hub reports them.
+    Filled from the hub's ``now-playing.json``. ``artist`` is an empty string
+    when the sender gave none (internet radio, some apps); ``album`` and
+    ``art_url`` are ``None`` when absent. ``rooms`` names the unmuted rooms the
+    track is playing in, in the order the hub reports them.
+
+    ``kind`` is ``"music"`` or ``"long_form"`` (podcasts, audiobooks, long
+    mixes). ``status`` is ``"playing"`` or ``"paused"``. ``duration`` and
+    ``position`` are seconds. ``position`` is the playback position at the
+    moment ``position_at`` was recorded, so a consumer extrapolates forward from
+    that anchor while playing (see ``position_now``). ``started_at`` is when the
+    hub first saw this track playing.
     """
 
     title: str
@@ -40,6 +49,31 @@ class NowPlaying:
     album: str | None = None
     art_url: str | None = None
     rooms: tuple[str, ...] = ()
+    kind: str = "music"
+    status: str = "playing"
+    duration: float | None = None
+    position: float | None = None
+    position_at: datetime | None = None
+    started_at: datetime | None = None
+
+    def position_now(self, now: datetime) -> float | None:
+        """The playback position at ``now``, or ``None`` without a position.
+
+        While playing, it extrapolates forward from the ``(position,
+        position_at)`` anchor; while paused it holds the recorded position. The
+        result is floored at zero and, when a duration is known, clamped to it,
+        so a resend or an over-run never carries the position past the track.
+        """
+        if self.position is None:
+            return None
+        pos = self.position
+        if self.status == "playing" and self.position_at is not None:
+            pos += (now - self.position_at).total_seconds()
+        if pos < 0:
+            pos = 0.0
+        if self.duration is not None and pos > self.duration:
+            pos = self.duration
+        return pos
 
 
 @dataclass(frozen=True)

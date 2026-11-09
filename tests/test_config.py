@@ -22,6 +22,15 @@ def test_art_min_aspect_default_and_override(tmp_path):
     assert load_config(p).art.min_aspect == 1.6
 
 
+def test_check_seconds_defaults_to_10(tmp_path):
+    # The frame reads now-playing.json every 10 seconds (a small LAN file read),
+    # so progress stays current between the 10-minute redraw buckets.
+    assert load_config().schedule.check_seconds == 10
+    p = tmp_path / "local.toml"
+    p.write_text("[schedule]\ncheck_seconds = 30\n")
+    assert load_config(p).schedule.check_seconds == 30
+
+
 def test_missing_location_is_none():
     assert load_config(Path("/nonexistent")).location.latitude is None
 
