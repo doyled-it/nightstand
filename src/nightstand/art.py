@@ -1,13 +1,16 @@
-"""The local art library: list the pieces, caption them, and pick one to show.
+"""The local art library: list the pieces, caption them, pick the eligible ones.
 
-Images live in a folder synced from the hub's art share. Each image may have a
-sidecar caption file named ``<image file>.txt`` beside it (line 1 the title,
-line 2 the artist, optional line 3 the museum object page as an https URL).
-Without one, the title falls back to the filename.
+Images live in a folder synced from the hub's library. Top-level files are the
+built-in "Collection"; each subdirectory one level down is a user folder. Each
+image may have a sidecar caption file named ``<image file>.txt`` beside it (line
+1 the title, line 2 the artist, optional line 3 the museum object page as an
+https URL). Without one, the title falls back to the filename.
 
-``pick`` is deterministic: it maps the clock to a time slot and returns the same
-piece for the whole slot, stepping to the next piece when the slot changes. The
-order is reshuffled each day so the sequence varies day to day.
+``eligible`` lists the pieces that may rotate (landscape enough to fill the
+panel); the live loop drives the rotation across them through the stateful
+``Rotation`` machine in ``rotation.py``. ``pick`` is the older stateless picker,
+kept for the ``preview art`` dev command: it maps the clock to a daily-shuffled
+slot and returns the same piece for the whole slot.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ _MINUTES_PER_DAY = 60 * 24
 
 
 class ArtLibrary:
-    """The art folder: the pieces in it and the rotation across them."""
+    """The art folder: the pieces in it, their captions, and which may rotate."""
 
     def __init__(self, dir: Path) -> None:
         self.dir = Path(dir)
@@ -39,15 +42,42 @@ class ArtLibrary:
         self._aspect_cache: dict[Path, tuple[float, int, float]] = {}
 
     def pieces(self) -> list[ArtPiece]:
-        """Every image in the folder, captioned, sorted by filename."""
+        """Every image in the library, captioned, with its id, sorted by id.
+
+        Top-level images form the built-in "Collection"; each subdirectory one
+        level down is a user folder. Deeper nesting, ``.trash``, and other hidden
+        folders are ignored, matching the hub's library layout. Each piece's
+        ``id`` is its path relative to the art directory (``met-1.jpg`` or
+        ``Photos/beach.jpg``).
+        """
         if not self.dir.is_dir():
             return []
-        files = sorted(
-            entry
-            for entry in self.dir.iterdir()
-            if entry.is_file() and entry.suffix.lower() in _EXTENSIONS
-        )
-        return [_piece_for(path) for path in files]
+        paths: list[Path] = []
+        for entry in self.dir.iterdir():
+            if entry.is_file() and entry.suffix.lower() in _EXTENSIONS:
+                paths.append(entry)
+            elif entry.is_dir() and not entry.name.startswith("."):
+                paths.extend(
+                    sub
+                    for sub in entry.iterdir()
+                    if sub.is_file() and sub.suffix.lower() in _EXTENSIONS
+                )
+        paths.sort(key=lambda path: path.relative_to(self.dir).as_posix())
+        return [_piece_for(path, self.dir) for path in paths]
+
+    def eligible(self, min_aspect: float = 0.0) -> list[ArtPiece]:
+        """The pieces that may rotate: those at least ``min_aspect`` wide.
+
+        A piece whose image cannot be read, or that is narrower than
+        ``min_aspect``, is left out. The aspect cache means an unchanged image is
+        decoded once rather than on every call.
+        """
+        result = []
+        for piece in self.pieces():
+            aspect = self._aspect(piece)
+            if aspect is not None and aspect >= min_aspect:
+                result.append(piece)
+        return result
 
     def pick(
         self, now: datetime, rotate_minutes: int, min_aspect: float = 0.0
@@ -103,11 +133,12 @@ class ArtLibrary:
 
 
 def art_slot(now: datetime, rotate_minutes: int) -> int:
-    """The rotation slot ``now`` falls in.
+    """The rotation slot ``now`` falls in, for the stateless ``pick`` preview.
 
     Buckets absolute epoch minutes, so it is independent of any timezone or DST
-    shift. ``pick`` and the rules engine's art redraw key share this helper so
-    the key always changes in step with the piece ``pick`` returns.
+    shift. The live loop rotates through the stateful ``Rotation`` machine
+    instead; ``pick`` and ``art_slot`` serve the ``preview art`` dev command,
+    which has no state file.
     """
     return int(now.timestamp()) // 60 // rotate_minutes
 
@@ -122,9 +153,15 @@ def load_piece_image(piece: ArtPiece) -> Image.Image | None:
         return None
 
 
-def _piece_for(path: Path) -> ArtPiece:
+def _piece_for(path: Path, root: Path) -> ArtPiece:
     title, artist, source_url = _caption(path)
-    return ArtPiece(path=path, title=title, artist=artist, source_url=source_url)
+    return ArtPiece(
+        path=path,
+        title=title,
+        artist=artist,
+        source_url=source_url,
+        id=path.relative_to(root).as_posix(),
+    )
 
 
 def _caption(path: Path) -> tuple[str, str | None, str | None]:

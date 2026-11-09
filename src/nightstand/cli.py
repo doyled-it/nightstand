@@ -36,9 +36,9 @@ from nightstand.screens import (
     split,
     weather,
 )
-from nightstand.sources import hubnowplaying, mlb
+from nightstand.sources import artcontrol, hubnowplaying, mlb
 from nightstand.sources import weather as weather_source
-from nightstand.sources.artsync import sync_art
+from nightstand.sources.artsync import sync_index
 from nightstand.sources.museums import fetch_museum
 
 logger = logging.getLogger(__name__)
@@ -373,7 +373,12 @@ def _run(args: argparse.Namespace) -> int:
 
     client = httpx.Client()
     try:
-        sources = LiveSources(config, client, cache_dir=_resolve_cache_dir(config))
+        sources = LiveSources(
+            config,
+            client,
+            cache_dir=_resolve_cache_dir(config),
+            state_dir=config.paths.state,
+        )
         if args.once:
             run_once(
                 AppState(), config, sources, display, datetime.now().astimezone()
@@ -395,10 +400,14 @@ def _run_art(args: argparse.Namespace) -> int:
 
 def _art_sync(args: argparse.Namespace) -> int:
     config = load_config()
-    base_url = _art_base_url(config)
+    authority = _hub_authority(config)
+    index_url = f"http://{authority}/art-index.json"
+    base_url = f"http://{authority}"
     dest = config.art.dir
     with httpx.Client() as client:
-        result = sync_art(client, base_url, dest)
+        control = artcontrol.fetch_control(client, authority)
+        enabled = set(control.folders_enabled) if control is not None else None
+        result = sync_index(client, index_url, base_url, dest, enabled)
     print(
         f"art sync: +{result.added} added, {result.updated} updated, "
         f"{result.removed} removed"
@@ -430,12 +439,11 @@ def _art_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
-def _art_base_url(config: Config) -> str:
-    """The hub's art listing URL, omitting the port when it is the default 80."""
+def _hub_authority(config: Config) -> str:
+    """The hub's HTTP authority, omitting the port when it is the default 80."""
     host = config.hub.host
     port = config.hub.http_port
-    authority = host if port == 80 else f"{host}:{port}"
-    return f"http://{authority}/art/"
+    return host if port == 80 else f"{host}:{port}"
 
 
 def _build_display(args: argparse.Namespace):

@@ -84,7 +84,7 @@ def a_forecast() -> Forecast:
 
 
 def an_art_piece() -> ArtPiece:
-    return ArtPiece(path=Path("/art/coastal.jpg"), title="Coastal")
+    return ArtPiece(path=Path("/art/coastal.jpg"), title="Coastal", id="coastal.jpg")
 
 
 def a_track() -> NowPlaying:
@@ -254,6 +254,32 @@ def test_unchanged_key_does_not_push():
     cfg = make_config()
     now = la(2026, 11, 9, 14, 0)
     decision = rules.decide(now, cfg, Context(art=an_art_piece()))
+    assert rules.should_push(decision, decision.redraw_key, now, cfg) is False
+
+
+def test_art_key_is_the_current_piece_id():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    decision = rules.decide(now, cfg, Context(art=an_art_piece()))
+    assert decision.redraw_key == ("art", "coastal.jpg")
+
+
+def test_forced_decision_pushes_in_quiet_hours_but_scheduled_does_not():
+    # A command bypasses quiet hours; scheduled rotation keeps the quiet rule.
+    cfg = make_config()
+    now = la(2026, 11, 9, 22, 30)  # quiet hours
+    scheduled = rules.decide(now, cfg, Context(art=an_art_piece()))
+    assert scheduled.screen == "art"
+    assert rules.should_push(scheduled, None, now, cfg) is False
+
+    forced = replace(scheduled, forced=True)
+    assert rules.should_push(forced, None, now, cfg) is True
+
+
+def test_forced_decision_still_suppressed_when_key_unchanged():
+    cfg = make_config()
+    now = la(2026, 11, 9, 22, 30)  # quiet hours
+    decision = replace(rules.decide(now, cfg, Context(art=an_art_piece())), forced=True)
     assert rules.should_push(decision, decision.redraw_key, now, cfg) is False
 
 

@@ -19,12 +19,18 @@ class ArtPiece:
     ``artist`` is ``None`` when the caption has only a title. ``source_url`` is
     the museum object page from the sidecar's optional third line, or ``None``
     when the sidecar has no third line or it is not an https URL.
+
+    ``id`` is the piece's path relative to the art directory (``met-334896.jpg``
+    or ``Photos/beach.jpg``), the stable identity the hub and the rotation state
+    use. It is empty only for a piece built outside the library (a preview
+    stand-in), which never takes part in rotation.
     """
 
     path: Path
     title: str
     artist: str | None = None
     source_url: str | None = None
+    id: str = ""
 
 
 @dataclass(frozen=True)

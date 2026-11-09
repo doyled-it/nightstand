@@ -138,7 +138,9 @@ class _FakeSources:
         return None
 
     def art(self, now):
-        return None
+        from nightstand.app import ArtView
+
+        return ArtView(piece=None)
 
     def health(self):
         return Health()
@@ -309,14 +311,23 @@ def test_show_passes_saturation(tmp_path, monkeypatch):
 def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_sync_art(client, base_url, dest):
+    def fake_sync_index(client, index_url, base_url, dest, enabled):
+        captured["index_url"] = index_url
         captured["base_url"] = base_url
         captured["dest"] = dest
+        captured["enabled"] = enabled
         from nightstand.sources.artsync import SyncResult
 
         return SyncResult(added=2, updated=1, removed=0)
 
-    monkeypatch.setattr("nightstand.cli.sync_art", fake_sync_art)
+    def fake_fetch_control(client, host):
+        captured["host"] = host
+        from nightstand.sources.artcontrol import ArtControl
+
+        return ArtControl(60, ("Collection",), None, None, None)
+
+    monkeypatch.setattr("nightstand.cli.sync_index", fake_sync_index)
+    monkeypatch.setattr("nightstand.cli.artcontrol.fetch_control", fake_fetch_control)
     config = tmp_path / "local.toml"
     art_dir = tmp_path / "art"
     config.write_text(
@@ -327,20 +338,27 @@ def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
     code = main(["art", "sync"])
 
     assert code == 0
-    assert captured["base_url"] == "http://hub.example/art/"
+    assert captured["index_url"] == "http://hub.example/art-index.json"
+    assert captured["base_url"] == "http://hub.example"
     assert captured["dest"] == art_dir
+    assert captured["host"] == "hub.example"
+    assert captured["enabled"] == {"Collection"}
 
 
-def test_art_sync_includes_non_default_http_port(tmp_path, monkeypatch):
+def test_art_sync_falls_back_to_all_folders_without_control(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_sync_art(client, base_url, dest):
+    def fake_sync_index(client, index_url, base_url, dest, enabled):
         captured["base_url"] = base_url
+        captured["enabled"] = enabled
         from nightstand.sources.artsync import SyncResult
 
         return SyncResult()
 
-    monkeypatch.setattr("nightstand.cli.sync_art", fake_sync_art)
+    monkeypatch.setattr("nightstand.cli.sync_index", fake_sync_index)
+    monkeypatch.setattr(
+        "nightstand.cli.artcontrol.fetch_control", lambda client, host: None
+    )
     config = tmp_path / "local.toml"
     config.write_text('[hub]\nhost = "hub.example"\nhttp_port = 8080\n')
     monkeypatch.setenv("NIGHTSTAND_CONFIG", str(config))
@@ -348,7 +366,8 @@ def test_art_sync_includes_non_default_http_port(tmp_path, monkeypatch):
     code = main(["art", "sync"])
 
     assert code == 0
-    assert captured["base_url"] == "http://hub.example:8080/art/"
+    assert captured["base_url"] == "http://hub.example:8080"
+    assert captured["enabled"] is None
 
 
 def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
