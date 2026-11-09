@@ -1217,3 +1217,97 @@ def test_steady_state_logs_no_held_after_push(caplog):
 
     assert len(_pushed_records(caplog)) == 1
     assert _held_records(caplog) == []
+
+
+def test_push_resets_held_so_the_same_hold_logs_again(tmp_path, caplog):
+    # A quiet-hours hold on a piece, a forced push of that same piece, then the
+    # same hold recurring (here via a health-marker flip, which changes the key
+    # but not the piece): the push must clear last_held so the hold logs afresh.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    piece = ArtPiece(path=art_path, title="Title", artist=None, id="met-1.jpg")
+    sources = FakeSources()
+    sources.art_piece = piece
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        # Held by quiet hours (first log).
+        assert run_once(state, cfg, sources, display, NOON) is False
+        # A command forces the same piece onto the panel: this push resets the
+        # held memory.
+        sources.art_forced = True
+        assert run_once(state, cfg, sources, display, NOON) is True
+        # Back to scheduled, and a health problem flips the marker so the key
+        # differs and the piece is held by quiet hours once more.
+        sources.art_forced = False
+        sources.health_obj = Health(problems=("nightstand",))
+        assert run_once(state, cfg, sources, display, NOON) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 2
+    assert all("quiet hours" in r.getMessage() for r in held)
+
+
+def test_held_dedupe_distinguishes_signatures(caplog):
+    # Two different tracks settling in a row log twice: the dedupe keys on the
+    # signature, not just the reason, so a constant signature would drop one.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song A", "Artist")
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        sources.np = NowPlaying("Song B", "Artist")
+        later = NOON + timedelta(seconds=5)
+        assert run_once(state, cfg, sources, display, later) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 2
+    assert all("settling" in r.getMessage() for r in held)
+
+
+def test_held_dedupe_distinguishes_reasons(caplog):
+    # The same track, first held for the settle and then (once settled) by quiet
+    # hours, logs both: the reason is part of the dedupe key.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        settled = NOON + timedelta(seconds=20)
+        assert run_once(state, cfg, sources, display, settled) is False
+
+    held = [r.getMessage() for r in _held_records(caplog)]
+    assert len(held) == 2
+    assert "settling" in held[0]
+    assert "quiet hours" in held[1]
+
+
+def test_quiet_hold_bucket_advance_logs_once(caplog):
+    # A long-form track held through quiet hours: its progress bucket advances,
+    # changing the redraw key, but the hold is on the track identity, so it is
+    # logged once, not on every bucket.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    lf = _long_form(position=0.0, position_at=NOON)
+    sources = FakeSources()
+    sources.np = lf
+    display = RecordingDisplay()
+    # Already the shown identity, so the settle does not mask the quiet hold.
+    state = AppState(shown_identity=(lf.title, lf.artist, lf.album))
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is False
+        # Eleven minutes later the 600 s bucket has advanced.
+        later = NOON + timedelta(minutes=11)
+        assert run_once(state, cfg, sources, display, later) is False
+
+    held = _held_records(caplog)
+    assert len(held) == 1
+    assert "quiet hours" in held[0].getMessage()

@@ -417,17 +417,36 @@ def _push_detail(
     return ""
 
 
+def _hold_signature(
+    screen: str,
+    np: NowPlaying | None,
+    art_piece: ArtPiece | None,
+    identity: TrackKey | None,
+) -> object:
+    """The stable identity of a held decision, for deduping the held log.
+
+    The art piece id or the now-playing identity, deliberately without the
+    progress bucket or health-marker bit that also ride in the redraw key. A
+    hold on the same piece or track is then logged once even as its bucket
+    advances or the marker flips through the night.
+    """
+    if screen == "art" and art_piece is not None:
+        return art_piece.id or art_piece.title
+    if screen in ("now_playing", "split"):
+        return identity
+    return None
+
+
 def _log_held(
     state: AppState, reason: str, screen: str, signature: object
 ) -> None:
-    """Log a held redraw once, when its reason or decision first changes.
+    """Log a held redraw once, when its reason, screen, or decision changes.
 
-    ``signature`` identifies the held decision (the now-playing identity for a
-    settle, the redraw key for a quiet-hours hold). While it and ``reason`` stay
-    the same the hold is not re-logged, so a steady hold does not spam the log
-    every cycle.
+    ``signature`` identifies the held decision (see ``_hold_signature``). While
+    it, ``reason``, and ``screen`` all stay the same the hold is not re-logged,
+    so a steady hold does not spam the log every cycle.
     """
-    held = (reason, signature)
+    held = (reason, screen, signature)
     if state.last_held == held:
         return
     state.last_held = held
@@ -474,7 +493,12 @@ def run_once(
         # what is shown, nothing to log) or because a changed, unforced decision
         # is held by quiet hours: that is the only other reason it declines here.
         if key != state.last_key:
-            _log_held(state, "quiet hours", decision.screen, key)
+            signature = _hold_signature(decision.screen, np, art_piece, identity)
+            _log_held(state, "quiet hours", decision.screen, signature)
+        else:
+            # Nothing is held this cycle, so forget any earlier hold: a later
+            # recurrence of it is a fresh hold and logs again.
+            state.last_held = None
         return False
 
     image = _render(
