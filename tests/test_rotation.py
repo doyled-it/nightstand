@@ -28,6 +28,18 @@ def a_rotation(tmp_path: Path) -> Rotation:
     return Rotation(tmp_path / "rotation.json", clock=lambda: T0)
 
 
+def show(rot: Rotation, elig, now, interval: int = 60):
+    """Decide the piece and confirm it reached the panel, as the loop does.
+
+    ``current`` only decides; the display loop calls ``commit`` once the art
+    screen is actually pushed. Tests that want a piece to count as shown go
+    through here so a scheduled advance is committed just as the loop commits it.
+    """
+    piece = rot.current(elig, now, interval)
+    rot.commit(now)
+    return piece
+
+
 def test_empty_eligible_gives_none(tmp_path):
     rot = a_rotation(tmp_path)
     assert rot.current([], T0, 60) is None
@@ -37,10 +49,10 @@ def test_current_is_stable_within_the_interval_then_advances(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(5)
 
-    first = rot.current(elig, T0, 60)
+    first = show(rot, elig, T0)
     assert first is not None
-    assert rot.current(elig, T0 + timedelta(minutes=59), 60) == first
-    advanced = rot.current(elig, T0 + timedelta(minutes=60), 60)
+    assert show(rot, elig, T0 + timedelta(minutes=59)) == first
+    advanced = show(rot, elig, T0 + timedelta(minutes=60))
     assert advanced is not None
     assert advanced.id != first.id
 
@@ -49,12 +61,12 @@ def test_interval_is_measured_from_the_last_change(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(5)
 
-    first = rot.current(elig, T0, 60)
+    first = show(rot, elig, T0)
     # Advance at the hour, which resets the clock on the new piece.
-    second = rot.current(elig, T0 + timedelta(minutes=60), 60)
+    second = show(rot, elig, T0 + timedelta(minutes=60))
     assert second.id != first.id
     # 59 minutes after that change, the new piece still holds.
-    assert rot.current(elig, T0 + timedelta(minutes=119), 60) == second
+    assert show(rot, elig, T0 + timedelta(minutes=119)) == second
 
 
 def test_startup_existing_command_only_records_its_seq(tmp_path):
@@ -62,7 +74,7 @@ def test_startup_existing_command_only_records_its_seq(tmp_path):
     # it; it records the seq and keeps showing its piece.
     rot = a_rotation(tmp_path)
     elig = pieces(5)
-    first = rot.current(elig, T0, 60)
+    first = show(rot, elig, T0)
 
     assert rot.apply(cmd(9, "next"), elig, T0) is False
     assert rot.current(elig, T0, 60) == first
@@ -75,7 +87,7 @@ def test_startup_existing_command_only_records_its_seq(tmp_path):
 def test_next_advances_and_previous_walks_back(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(5)
-    first = rot.current(elig, T0, 60)
+    first = show(rot, elig, T0)
 
     assert rot.apply(cmd(1, "next"), elig, T0) is False  # startup adopt
     assert rot.apply(cmd(2, "next"), elig, T0) is True
@@ -96,7 +108,7 @@ def test_next_advances_and_previous_walks_back(tmp_path):
 def test_previous_with_empty_back_stack_does_nothing(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(5)
-    first = rot.current(elig, T0, 60)
+    first = show(rot, elig, T0)
     assert rot.apply(cmd(1, "next"), elig, T0) is False  # startup adopt
 
     assert rot.apply(cmd(2, "previous"), elig, T0) is False
@@ -106,7 +118,7 @@ def test_previous_with_empty_back_stack_does_nothing(tmp_path):
 def test_show_a_piece_then_resume_after_one_interval(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(5)
-    shown = rot.current(elig, T0, 60)
+    shown = show(rot, elig, T0)
     assert rot.apply(cmd(1, "next"), elig, T0) is False  # startup adopt
 
     current_id = rot.current(elig, T0, 60).id
@@ -124,7 +136,7 @@ def test_show_a_piece_then_resume_after_one_interval(tmp_path):
 def test_show_an_ineligible_piece_is_ignored(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(5)
-    rot.current(elig, T0, 60)
+    show(rot, elig, T0)
     assert rot.apply(cmd(1, "next"), elig, T0) is False  # startup adopt
     before = rot.current(elig, T0, 60)
 
@@ -135,7 +147,7 @@ def test_show_an_ineligible_piece_is_ignored(tmp_path):
 def test_next_with_a_single_eligible_piece_does_not_change(tmp_path):
     rot = a_rotation(tmp_path)
     elig = pieces(1)
-    only = rot.current(elig, T0, 60)
+    only = show(rot, elig, T0)
     assert rot.apply(cmd(1, "next"), elig, T0) is False  # startup adopt
 
     assert rot.apply(cmd(2, "next"), elig, T0) is False
@@ -146,7 +158,7 @@ def test_restart_resumes_the_current_piece(tmp_path):
     state = tmp_path / "rotation.json"
     rot = Rotation(state, clock=lambda: T0)
     elig = pieces(5)
-    rot.current(elig, T0, 60)
+    show(rot, elig, T0)
     assert rot.apply(cmd(1, "next"), elig, T0) is False
     assert rot.apply(cmd(2, "next"), elig, T0) is True
     current_id = rot.current(elig, T0, 60).id
@@ -163,7 +175,7 @@ def test_restart_does_not_replay_a_command_waiting_in_the_file(tmp_path):
     state = tmp_path / "rotation.json"
     rot = Rotation(state, clock=lambda: T0)
     elig = pieces(5)
-    rot.current(elig, T0, 60)
+    show(rot, elig, T0)
     rot.apply(cmd(1, "next"), elig, T0)  # startup adopt
     rot.apply(cmd(2, "next"), elig, T0)  # acts
 
@@ -179,7 +191,7 @@ def test_no_command_still_consumes_the_startup_grace(tmp_path):
     # real command it then sees while running.
     rot = a_rotation(tmp_path)
     elig = pieces(5)
-    first = rot.current(elig, T0, 60)
+    first = show(rot, elig, T0)
 
     none_cmd = ArtControl(60, (), seq=None, action=None, piece=None)
     assert rot.apply(none_cmd, elig, T0) is False  # consumes the grace
@@ -191,7 +203,7 @@ def test_back_stack_is_capped_at_twenty(tmp_path):
     state = tmp_path / "rotation.json"
     rot = Rotation(state, clock=lambda: T0)
     elig = pieces(30)
-    rot.current(elig, T0, 60)
+    show(rot, elig, T0)
     rot.apply(cmd(1, "next"), elig, T0)  # startup adopt
     for seq in range(2, 30):
         rot.apply(cmd(seq, "next"), elig, T0)
@@ -207,3 +219,42 @@ def test_ignores_a_corrupt_state_file(tmp_path):
     elig = pieces(3)
 
     assert rot.current(elig, T0, 60) is not None
+
+
+def test_scheduled_advance_is_not_committed_until_the_piece_is_shown(tmp_path):
+    # Important-1: deciding the piece is separate from committing that it was
+    # shown. The interval elapsing is not enough; only a confirmed push advances.
+    rot = a_rotation(tmp_path)
+    elig = pieces(5)
+    first = show(rot, elig, T0)
+
+    # The interval elapses, but nothing confirms the art reached the panel, so
+    # the state does not advance. Asking again decides the same single step, not
+    # a catch-up through every missed interval.
+    decided = rot.current(elig, T0 + timedelta(minutes=60), 60)
+    assert decided.id != first.id
+    again = rot.current(elig, T0 + timedelta(minutes=180), 60)
+    assert again.id == decided.id
+    saved = json.loads((tmp_path / "rotation.json").read_text())
+    assert saved["current_id"] == first.id
+    assert saved["back"] == []
+
+    # Confirming the show advances exactly one step and records the piece it
+    # left on the back stack, so "previous" walks what was actually shown.
+    assert rot.commit(T0 + timedelta(minutes=180)) is True
+    saved = json.loads((tmp_path / "rotation.json").read_text())
+    assert saved["current_id"] == decided.id
+    assert saved["back"] == [first.id]
+
+
+def test_commit_without_a_decided_advance_is_a_no_op(tmp_path):
+    rot = a_rotation(tmp_path)
+    elig = pieces(5)
+    first = show(rot, elig, T0)
+
+    # Inside the interval the piece holds; there is nothing to commit.
+    assert rot.current(elig, T0 + timedelta(minutes=30), 60).id == first.id
+    assert rot.commit(T0 + timedelta(minutes=30)) is False
+    saved = json.loads((tmp_path / "rotation.json").read_text())
+    assert saved["current_id"] == first.id
+    assert saved["back"] == []

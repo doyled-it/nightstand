@@ -157,6 +157,7 @@ class Sources(Protocol):
     def logo(self, team_id: int) -> Image.Image | None: ...
     def forecast(self) -> Forecast | None: ...
     def art(self, now: datetime) -> ArtView: ...
+    def commit_art(self, now: datetime) -> None: ...
     def health(self) -> Health: ...
 
 
@@ -297,6 +298,13 @@ class LiveSources:
         piece = self._rotation.current(eligible, now, interval)
         return ArtView(piece=piece, forced=forced)
 
+    def commit_art(self, now: datetime) -> None:
+        # Confirm a scheduled advance only when the art screen actually reached
+        # the panel, so "previous" walks what was shown (final review
+        # Important-1). A command already advanced in ``apply``; this is then a
+        # no-op. Never let a failure here stop the loop.
+        self._guard("commit_art", lambda: self._rotation.commit(now))
+
     def health(self) -> Health:
         # Guarded like the other sources so a health-poll failure degrades to
         # "no known problems" and can never stop the loop.
@@ -432,12 +440,16 @@ def run_once(
     state.last_key = key
     state.shown_identity = identity
     state.pending = None
-    if history is not None and decision.screen == "art" and art_piece is not None:
-        # ``pick`` already returned a piece whose image decodes, so an art
-        # decision means the art screen is what reached the panel. Record it;
-        # the history itself drops a piece that is already current, so a redraw
-        # under the same slot (a marker flip, say) does not add a duplicate.
-        _record_history(state, history, art_piece, now)
+    if decision.screen == "art" and art_piece is not None:
+        # The art screen is what reached the panel (its image already decoded),
+        # so confirm any scheduled advance now: the rotation and its back stack
+        # track what was shown, not the clock (final review Important-1). A
+        # command already advanced in ``apply``, so this is then a no-op.
+        sources.commit_art(now)
+        if history is not None:
+            # The history itself drops a piece that is already current, so a
+            # redraw under the same slot (a marker flip, say) adds no duplicate.
+            _record_history(state, history, art_piece, now)
     return True
 
 

@@ -75,6 +75,11 @@ class FakeSources:
     def art(self, now):
         return ArtView(piece=self.art_piece, forced=self.art_forced)
 
+    def commit_art(self, now):
+        # A fixed-piece fake has no rotation to advance; the real wiring is
+        # exercised by _RotatingArtSource below.
+        pass
+
     def health(self):
         return self.health_obj
 
@@ -487,6 +492,150 @@ def test_scheduled_art_is_held_in_quiet_hours(tmp_path):
     assert display.shown == []
 
 
+class _RotatingArtSource(FakeSources):
+    """A fake backed by a real ``Rotation``, mirroring what ``LiveSources`` does.
+
+    ``art`` decides the piece (``Rotation.current``) and ``commit_art`` confirms
+    it was shown (``Rotation.commit``), so the loop advances the rotation only
+    when the art screen actually reaches the panel (Important-1).
+    """
+
+    def __init__(self, rotation, eligible, interval: int = 60) -> None:
+        super().__init__()
+        self._rotation = rotation
+        self._eligible = eligible
+        self._interval = interval
+
+    def art(self, now):
+        piece = self._rotation.current(self._eligible, now, self._interval)
+        return ArtView(piece=piece, forced=False)
+
+    def commit_art(self, now):
+        self._rotation.commit(now)
+
+
+def _art_pieces(tmp_path, n: int):
+    pieces = []
+    for i in range(n):
+        path = tmp_path / f"p{i}.png"
+        Image.new("RGB", (400, 300), PURE["green"]).save(path)
+        pieces.append(ArtPiece(path=path, title=f"P{i}", id=f"p{i}.png"))
+    return pieces
+
+
+def _rotation_state(tmp_path) -> dict:
+    return json.loads((tmp_path / "rotation.json").read_text())
+
+
+def test_scheduled_art_does_not_advance_while_music_holds_the_screen(tmp_path):
+    # Important-1: music is on the panel across two intervals, so the rotation
+    # must not step and the back stack must stay empty.
+    from nightstand.rotation import Rotation
+
+    cfg = _loop_config()  # quiet window never matches
+    elig = _art_pieces(tmp_path, 5)
+    clock = _Clock(NOON)
+    rot = Rotation(tmp_path / "rotation.json", clock=clock)
+    sources = _RotatingArtSource(rot, elig)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Art reaches the panel first; the rotation commits its first piece.
+    assert run_once(state, cfg, sources, display, clock()) is True
+    first_id = _rotation_state(tmp_path)["current_id"]
+    assert first_id is not None
+
+    # Music starts and holds the screen across two full intervals.
+    sources.np = NowPlaying("Song", "Artist")
+    clock.advance(20)
+    run_once(state, cfg, sources, display, clock())  # music settles and pushes
+    clock.now = NOON + timedelta(minutes=60)
+    run_once(state, cfg, sources, display, clock())
+    clock.now = NOON + timedelta(minutes=120)
+    run_once(state, cfg, sources, display, clock())
+
+    after = _rotation_state(tmp_path)
+    assert after["current_id"] == first_id  # no advance while music held
+    assert after["back"] == []
+
+
+def test_scheduled_art_does_not_advance_during_quiet_hours(tmp_path):
+    from nightstand.rotation import Rotation
+
+    # Quiet hours [13:00, 14:00); NOON (12:00) is outside, 13:30 is inside.
+    cfg = _loop_config(quiet_start="13:00", quiet_end="14:00")
+    elig = _art_pieces(tmp_path, 5)
+    clock = _Clock(NOON)
+    rot = Rotation(tmp_path / "rotation.json", clock=clock)
+    sources = _RotatingArtSource(rot, elig)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Art shown first, outside quiet hours; the rotation commits a piece.
+    assert run_once(state, cfg, sources, display, clock()) is True
+    first_id = _rotation_state(tmp_path)["current_id"]
+
+    # An interval later, now inside quiet hours: the push is held, so no advance.
+    clock.now = datetime(2026, 11, 6, 13, 30, tzinfo=UTC)
+    assert run_once(state, cfg, sources, display, clock()) is False
+    assert display.shown == [display.shown[0]]  # only the first push
+
+    after = _rotation_state(tmp_path)
+    assert after["current_id"] == first_id
+    assert after["back"] == []
+
+
+def test_art_advances_once_when_it_returns_after_a_long_gap(tmp_path):
+    from nightstand.rotation import Rotation
+
+    cfg = _loop_config()  # quiet window never matches
+    elig = _art_pieces(tmp_path, 5)
+    clock = _Clock(NOON)
+    rot = Rotation(tmp_path / "rotation.json", clock=clock)
+    sources = _RotatingArtSource(rot, elig)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Art shown first; the rotation commits piece A.
+    assert run_once(state, cfg, sources, display, clock()) is True
+    a_id = _rotation_state(tmp_path)["current_id"]
+
+    # Music holds the screen for five hours (many missed intervals).
+    sources.np = NowPlaying("Song", "Artist")
+    clock.advance(20)
+    run_once(state, cfg, sources, display, clock())  # music pushes
+    clock.now = NOON + timedelta(hours=5)
+    run_once(state, cfg, sources, display, clock())  # still music
+
+    # Music stops; art returns and settles.
+    sources.np = None
+    stop = NOON + timedelta(hours=5, seconds=30)
+    clock.now = stop
+    assert run_once(state, cfg, sources, display, clock()) is False  # settle wait
+    clock.now = stop + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, clock()) is True  # art pushes
+
+    after = _rotation_state(tmp_path)
+    b_id = after["current_id"]
+    assert b_id != a_id  # advanced exactly one step
+    assert after["back"] == [a_id]  # A, a piece actually drawn, is behind us
+
+    # Back walks to A. The first command of the process is adopted as a baseline
+    # (startup grace), so the second one acts.
+    now = clock()
+    assert rot.apply(_control_cmd(1, "previous"), elig, now) is False
+    assert rot.apply(_control_cmd(2, "previous"), elig, now) is True
+    assert rot.current(elig, now, 60).id == a_id
+
+
+def _control_cmd(seq: int, action: str):
+    from nightstand.sources.artcontrol import ArtControl
+
+    return ArtControl(
+        rotate_minutes=60, folders_enabled=(), seq=seq, action=action, piece=None
+    )
+
+
 def test_live_sources_art_follows_hub_control_and_commands(tmp_path):
     art_dir = tmp_path / "art"
     art_dir.mkdir()
@@ -511,6 +660,9 @@ def test_live_sources_art_follows_hub_control_and_commands(tmp_path):
         view = sources.art(NOON)
         assert view.piece is not None
         assert view.forced is False  # first command seen at startup is adopted
+        # The frame drew that piece, so the rotation commits it; a later "next"
+        # then advances off it.
+        sources.commit_art(NOON)
 
         control["command"]["seq"] = 6
         forced_view = sources.art(NOON)
