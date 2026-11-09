@@ -304,6 +304,12 @@ class LiveSources:
         self._outages.pop(name, None)
 
 
+# The now-playing identity the settle holds on: title, artist, album. A track
+# with a title but no artist carries an empty-string artist; album is None when
+# absent. ``None`` (not this tuple) means nothing is playing.
+TrackKey = tuple[str, str, str | None]
+
+
 @dataclass
 class AppState:
     """What the loop remembers between cycles: the last pushed redraw key.
@@ -315,10 +321,38 @@ class AppState:
     ``history_write_failing`` remembers whether the last art-history write
     failed, so a persistent write outage is logged once (on the state change)
     rather than on every cycle.
+
+    ``shown_identity`` is the now-playing identity currently on the panel (or
+    ``None`` for nothing playing); ``pending`` is the identity the settle is
+    waiting on and when it was first seen, or ``None`` when nothing is pending.
+    Together they hold a changed identity off the panel until it has been stable
+    for ``settle_seconds``.
     """
 
     last_key: tuple | None = None
     history_write_failing: bool = False
+    shown_identity: TrackKey | None = None
+    pending: tuple[TrackKey | None, datetime] | None = None
+
+
+def _settled(
+    state: AppState, identity: TrackKey | None, now: datetime, cfg: Config
+) -> bool:
+    """Whether the now-playing identity has held long enough to redraw.
+
+    An identity equal to what is already shown is settled at once, so bucket and
+    room changes within the same track never wait. A changed identity starts (or
+    continues) a settle timer and is held until it has been seen continuously for
+    ``settle_seconds``; a different identity arriving mid-wait restarts the timer.
+    """
+    if identity == state.shown_identity:
+        state.pending = None
+        return True
+    if state.pending is None or state.pending[0] != identity:
+        state.pending = (identity, now)
+        return False
+    elapsed = (now - state.pending[1]).total_seconds()
+    return elapsed >= cfg.schedule.settle_seconds
 
 
 def run_once(
@@ -340,6 +374,10 @@ def run_once(
     )
     decision = rules.decide(now, cfg, ctx)
 
+    identity = (np.title, np.artist, np.album) if np is not None else None
+    if not _settled(state, identity, now, cfg):
+        return False
+
     health = sources.health()
     marker_state = bool(health.problems)
     key = decision.redraw_key + (marker_state,)
@@ -354,6 +392,8 @@ def run_once(
     image = marker.apply(image, health)
     display.show(image)
     state.last_key = key
+    state.shown_identity = identity
+    state.pending = None
     if history is not None and decision.screen == "art" and art_piece is not None:
         # ``pick`` already returned a piece whose image decodes, so an art
         # decision means the art screen is what reached the panel. Record it;

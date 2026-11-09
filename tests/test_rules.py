@@ -255,3 +255,59 @@ def test_unchanged_key_does_not_push():
     now = la(2026, 11, 9, 14, 0)
     decision = rules.decide(now, cfg, Context(art=an_art_piece()))
     assert rules.should_push(decision, decision.redraw_key, now, cfg) is False
+
+
+# --- progress bucket ----------------------------------------------------------
+
+
+def a_long_form(*, status="playing", position=0.0) -> NowPlaying:
+    return NowPlaying(
+        title="Episode 1",
+        artist="Show",
+        album=None,
+        rooms=("Office",),
+        kind="long_form",
+        status=status,
+        duration=7200.0,
+        position=position,
+        position_at=la(2026, 11, 9, 14, 0),
+    )
+
+
+def test_long_form_bucket_increments_every_ten_minutes_while_playing():
+    cfg = make_config()
+    start = la(2026, 11, 9, 14, 0)
+    track = a_long_form(position=0.0)
+
+    assert rules._now_playing_key(track, start, cfg)[-1] == 0
+    assert rules._now_playing_key(track, start + timedelta(seconds=599), cfg)[-1] == 0
+    assert rules._now_playing_key(track, start + timedelta(seconds=600), cfg)[-1] == 1
+    assert rules._now_playing_key(track, start + timedelta(seconds=1250), cfg)[-1] == 2
+
+
+def test_long_form_bucket_stays_fixed_while_paused():
+    cfg = make_config()
+    start = la(2026, 11, 9, 14, 0)
+    # Paused at 1300 s (bucket 2). position_now holds the recorded position, so
+    # the bucket must not advance as wall-clock time passes.
+    track = a_long_form(status="paused", position=1300.0)
+
+    assert rules._now_playing_key(track, start, cfg)[-1] == 2
+    assert rules._now_playing_key(track, start + timedelta(seconds=600), cfg)[-1] == 2
+
+
+def test_music_track_has_no_bucket():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    # a_track() is kind="music"; even with a position, music never buckets.
+    music = replace(a_track(), position=120.0, position_at=now)
+
+    assert rules._now_playing_key(music, now, cfg)[-1] is None
+
+
+def test_long_form_without_a_known_position_has_no_bucket():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    track = replace(a_long_form(), position=None, position_at=None)
+
+    assert rules._now_playing_key(track, now, cfg)[-1] is None

@@ -101,6 +101,20 @@ def _now_playing_doc() -> dict:
     )
 
 
+def _long_form(position: float, position_at: datetime) -> NowPlaying:
+    return NowPlaying(
+        title="Episode 412",
+        artist="Show",
+        album=None,
+        rooms=("Office",),
+        kind="long_form",
+        status="playing",
+        duration=7200.0,
+        position=position,
+        position_at=position_at,
+    )
+
+
 def test_unchanged_world_pushes_once_across_three_cycles():
     cfg = _loop_config()
     sources = FakeSources()
@@ -108,9 +122,13 @@ def test_unchanged_world_pushes_once_across_three_cycles():
     display = RecordingDisplay()
     state = AppState()
 
-    results = [run_once(state, cfg, sources, display, NOON) for _ in range(3)]
+    # The track settles after 20 s, then the unchanged world holds the panel.
+    results = [
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=offset))
+        for offset in (0, 20, 40)
+    ]
 
-    assert results == [True, False, False]
+    assert results == [False, True, False]
     assert len(display.shown) == 1
     assert display.shown[0].size == (WIDTH, HEIGHT)
 
@@ -122,11 +140,124 @@ def test_now_playing_change_pushes():
     state = AppState()
 
     sources.np = NowPlaying("First", "A")
-    assert run_once(state, cfg, sources, display, NOON) is True
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert run_once(state, cfg, sources, display, NOON + timedelta(seconds=20)) is True
     sources.np = NowPlaying("Second", "B")
-    assert run_once(state, cfg, sources, display, NOON) is True
+    settled = NOON + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, settled) is False
+    resettled = settled + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, resettled) is True
 
     assert len(display.shown) == 2
+
+
+def test_new_track_holds_until_settle_seconds():
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    display = RecordingDisplay()
+    state = AppState()
+
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert (
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=19)) is False
+    )
+    assert (
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=20)) is True
+    )
+    assert len(display.shown) == 1
+
+
+def test_skipping_three_tracks_in_thirty_seconds_pushes_once_for_the_last():
+    cfg = _loop_config()
+    sources = FakeSources()
+    display = RecordingDisplay()
+    state = AppState()
+
+    sources.np = NowPlaying("One", "A")
+    assert run_once(state, cfg, sources, display, NOON) is False
+    sources.np = NowPlaying("Two", "B")
+    assert (
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=15)) is False
+    )
+    sources.np = NowPlaying("Three", "C")
+    assert (
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=30)) is False
+    )
+    # "Three" appears at t=30 and must stay stable 20 s, so it pushes at t=50.
+    assert (
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=49)) is False
+    )
+    assert (
+        run_once(state, cfg, sources, display, NOON + timedelta(seconds=50)) is True
+    )
+    assert len(display.shown) == 1
+
+
+def test_stop_to_nothing_playing_waits_before_art(tmp_path):
+    cfg = _loop_config()
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    sources.art_piece = ArtPiece(path=art_path, title="Title", artist=None)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Settle and show the track.
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert run_once(state, cfg, sources, display, NOON + timedelta(seconds=20)) is True
+
+    # Music stops. Art is the decision, but the stop must settle for 20 s first.
+    sources.np = None
+    stop = NOON + timedelta(seconds=60)
+    assert run_once(state, cfg, sources, display, stop) is False
+    assert run_once(state, cfg, sources, display, stop + timedelta(seconds=19)) is False
+    assert run_once(state, cfg, sources, display, stop + timedelta(seconds=20)) is True
+    assert len(display.shown) == 2
+
+
+def test_bucket_change_for_the_same_track_pushes_immediately():
+    cfg = _loop_config()
+    sources = FakeSources()
+    anchor = NOON
+    sources.np = _long_form(0.0, anchor)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Settle and show bucket 0.
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert run_once(state, cfg, sources, display, NOON + timedelta(seconds=20)) is True
+
+    # Ten minutes in, the same track crosses into bucket 1 and pushes at once,
+    # with no fresh settle wait.
+    crossed = anchor + timedelta(seconds=600)
+    assert run_once(state, cfg, sources, display, crossed) is True
+    assert len(display.shown) == 2
+
+
+def test_quiet_hours_hold_settled_change_then_first_push_carries_current_bucket():
+    # Quiet hours [06:00, 12:30); NOON (12:00) is inside, 12:30 is the first
+    # minute outside.
+    cfg = _loop_config(quiet_start="06:00", quiet_end="12:30")
+    sources = FakeSources()
+    anchor = NOON
+    sources.np = _long_form(0.0, anchor)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # The new track settles during quiet hours but quiet hours hold the push.
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert run_once(state, cfg, sources, display, NOON + timedelta(seconds=20)) is False
+    assert run_once(state, cfg, sources, display, NOON + timedelta(minutes=10)) is False
+    assert display.shown == []
+
+    # Quiet hours end at 12:30. The track is now ~30 min in (bucket 3), and the
+    # first push after quiet hours carries that current bucket.
+    end = datetime(2026, 11, 6, 12, 30, tzinfo=UTC)
+    assert run_once(state, cfg, sources, display, end) is True
+    assert state.last_key[5] == 3
+    assert len(display.shown) == 1
 
 
 def test_health_problem_adds_marker_and_pushes_once():
@@ -136,14 +267,17 @@ def test_health_problem_adds_marker_and_pushes_once():
     display = RecordingDisplay()
     state = AppState()
 
-    assert run_once(state, cfg, sources, display, NOON) is True
+    # Settle the track first; the marker change then pushes without a new wait.
+    assert run_once(state, cfg, sources, display, NOON) is False
+    settled = NOON + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, settled) is True
     assert not _marker_present(display.shown[-1])
 
     sources.health_obj = Health(problems=("office.local behind main",))
-    assert run_once(state, cfg, sources, display, NOON) is True
+    assert run_once(state, cfg, sources, display, settled) is True
     assert _marker_present(display.shown[-1])
     # No further change: the marker state is part of the redraw key.
-    assert run_once(state, cfg, sources, display, NOON) is False
+    assert run_once(state, cfg, sources, display, settled) is False
     assert len(display.shown) == 2
 
 
@@ -155,11 +289,13 @@ def test_recovery_clears_marker_and_pushes_once():
     display = RecordingDisplay()
     state = AppState()
 
-    assert run_once(state, cfg, sources, display, NOON) is True
+    assert run_once(state, cfg, sources, display, NOON) is False
+    settled = NOON + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, settled) is True
     assert _marker_present(display.shown[-1])
 
     sources.health_obj = Health()
-    assert run_once(state, cfg, sources, display, NOON) is True
+    assert run_once(state, cfg, sources, display, settled) is True
     assert not _marker_present(display.shown[-1])
 
 
@@ -172,6 +308,8 @@ def test_data_source_outage_draws_no_marker(tmp_path):
     live = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
     display = RecordingDisplay()
 
+    # The now-playing read fails, degrading to nothing playing (identity None),
+    # so the placeholder pushes at once without a settle wait.
     assert run_once(AppState(), cfg, live, display, NOON) is True
     assert live.health().problems == ()
     assert not _marker_present(display.shown[-1])
@@ -182,7 +320,9 @@ def test_quiet_hours_suppress_non_game_push():
     sources = FakeSources()
     sources.np = NowPlaying("Song", "Artist")
     display = RecordingDisplay()
-    state = AppState()
+    # The track is already the shown identity, so the settle does not mask the
+    # quiet-hours suppression we are checking.
+    state = AppState(shown_identity=("Song", "Artist", None))
 
     assert run_once(state, cfg, sources, display, NOON) is False
     assert display.shown == []
@@ -235,8 +375,13 @@ def test_run_once_non_art_screen_does_not_record_history(tmp_path):
     sources = FakeSources()
     sources.np = NowPlaying("Song", "Artist")
     history = ArtHistory(tmp_path / "art-history.json")
+    state = AppState()
+    display = RecordingDisplay()
 
-    assert run_once(AppState(), cfg, sources, RecordingDisplay(), NOON, history) is True
+    # Settle, then push the now-playing screen: a non-art push writes no history.
+    assert run_once(state, cfg, sources, display, NOON, history) is False
+    settled = NOON + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, settled, history) is True
 
     assert not (tmp_path / "art-history.json").exists()
 
@@ -336,7 +481,8 @@ def test_run_once_renders_placeholder_when_nothing_matches():
 def test_run_forever_runs_each_cycle_and_sleeps():
     cfg = _loop_config()
     sources = FakeSources()
-    sources.np = NowPlaying("Song", "Artist")
+    # Nothing playing (identity None) so the placeholder pushes at once; this
+    # test is about the loop and sleep cadence, not the settle.
     display = RecordingDisplay()
     sleeps: list[int] = []
 

@@ -44,6 +44,13 @@ class Schedule:
     # each cycle, so 10 s keeps progress current between the 10-minute redraw
     # buckets without redrawing the panel more often.
     check_seconds: int = 10
+    # A now-playing identity change (including to or from nothing playing) must
+    # hold stable this long before the frame redraws, so skipping through tracks
+    # does not flicker the panel. Bucket and room changes do not wait.
+    settle_seconds: int = 20
+    # The redraw bucket size for a long-form track's progress: the key changes
+    # only when the extrapolated position crosses one of these boundaries.
+    progress_bucket_seconds: int = 600
 
 
 @dataclass(frozen=True)

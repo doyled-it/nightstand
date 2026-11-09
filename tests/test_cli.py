@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 from nightstand.cli import main
-from nightstand.models import Health, NowPlaying
+from nightstand.models import Health
 from nightstand.palette import PURE
 from nightstand.screens import placeholder
 
@@ -113,10 +113,15 @@ def test_preview_game_renders_from_fixture(tmp_path, monkeypatch):
 
 
 class _FakeSources:
-    """A ``Sources`` with music playing and no other data, for the run CLI."""
+    """A ``Sources`` with nothing playing, for the run CLI.
+
+    A single cycle renders the placeholder and writes it: nothing is playing, so
+    the now-playing settle (which would hold a fresh track off a one-shot cycle)
+    does not apply here.
+    """
 
     def now_playing(self):
-        return NowPlaying("Song", "Artist")
+        return None
 
     def cover(self, np):
         return None

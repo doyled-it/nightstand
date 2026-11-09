@@ -114,7 +114,9 @@ def _by_priority(now: datetime, cfg: Config, ctx: Context) -> Decision:
                 return Decision("weather", _weather_key(now, cfg))
         elif name == "music":
             if ctx.now_playing is not None:
-                return Decision("now_playing", _now_playing_key(ctx.now_playing))
+                return Decision(
+                    "now_playing", _now_playing_key(ctx.now_playing, now, cfg)
+                )
         elif name == "game":
             if ctx.game is not None and _game_on_screen(ctx.game, now, cfg):
                 return Decision("game", ("game",) + game_redraw_key(ctx.game))
@@ -149,8 +151,21 @@ def _game_on_screen(game: GameState, now: datetime, cfg: Config) -> bool:
     return False
 
 
-def _now_playing_key(np: NowPlaying) -> tuple:
-    return ("np", np.title, np.artist, np.album, np.rooms)
+def _now_playing_key(np: NowPlaying, now: datetime, cfg: Config) -> tuple:
+    """The redraw key for a now-playing track.
+
+    Identity (title, artist, album) and rooms, plus a progress bucket: for a
+    ``long_form`` track with a known position, the index of its extrapolated
+    position within ``schedule.progress_bucket_seconds`` buckets, else ``None``.
+    A paused track freezes the bucket, since ``position_now`` holds the recorded
+    position while paused. Music tracks never bucket.
+    """
+    bucket = None
+    if np.kind == "long_form":
+        position = np.position_now(now)
+        if position is not None:
+            bucket = int(position // cfg.schedule.progress_bucket_seconds)
+    return ("np", np.title, np.artist, np.album, np.rooms, bucket)
 
 
 def _weather_key(now: datetime, cfg: Config) -> tuple:
@@ -159,7 +174,7 @@ def _weather_key(now: datetime, cfg: Config) -> tuple:
 
 
 def _split_key(now: datetime, cfg: Config, np: NowPlaying) -> tuple:
-    return _weather_key(now, cfg) + _now_playing_key(np)
+    return _weather_key(now, cfg) + _now_playing_key(np, now, cfg)
 
 
 def _art_key(now: datetime, cfg: Config, piece: ArtPiece) -> tuple:
