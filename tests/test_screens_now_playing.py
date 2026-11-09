@@ -146,19 +146,43 @@ def test_only_ellipsizes_at_the_smallest_size():
 # --- Bounds (Review Focus 5) -------------------------------------------------
 
 
+def a_text_only(title: str) -> NowPlaying:
+    """A track that draws only the text column: no duration (no strip), no rooms.
+
+    Isolating the text column is what lets the bounds tests bite. The strip and
+    chips are drawn at fixed y values at or below ``STRIP_TOP`` by construction,
+    so the one thing that could cross into them is the title/artist/album block;
+    with the strip and chips absent, any non-white pixel below ``STRIP_TOP`` (or
+    right of ``TEXT_RIGHT``) is the text column overflowing, which the crop below
+    is wide and tall enough to catch.
+    """
+    return NowPlaying(
+        title=title,
+        artist="Nova Reef, The Saltwater Choir",
+        album="Blue Hour",
+        art_url="http://hub.local/cover/x.jpg",
+        rooms=(),
+    )
+
+
 def _column_bbox(img: Image.Image, left: int):
-    """Bbox of non-white pixels in the text column to the right of ``left``."""
-    region = img.crop((left, 0, now_playing.TEXT_RIGHT, now_playing.STRIP_TOP))
+    """Bbox of non-white pixels anywhere from ``left`` to the right/bottom edges.
+
+    The crop runs to the full width and height of the canvas (not to the asserted
+    limits), so a title that overflowed past ``TEXT_RIGHT`` or down into the strip
+    produces a bbox that exceeds the limit instead of being silently clipped to
+    it. Returns absolute image coordinates.
+    """
+    region = img.crop((left, 0, now_playing.WIDTH, now_playing.HEIGHT))
     white = Image.new("RGB", region.size, PURE["white"])
     bbox = ImageChops.difference(region, white).getbbox()
     if bbox is None:
         return None
-    # Translate back into absolute image coordinates.
     return (bbox[0] + left, bbox[1], bbox[2] + left, bbox[3])
 
 
 def test_long_title_stays_inside_the_text_box():
-    np = a_music_track(title="Movement " * 40)  # 360 characters
+    np = a_text_only(title="Movement " * 40)  # 360 characters
     rendered = now_playing.render(np, sample_cover(), NOW).convert("RGB")
     bbox = _column_bbox(rendered, now_playing.TEXT_X_WITH_COVER)
     assert bbox is not None, "expected the text column to draw something"
@@ -170,7 +194,7 @@ def test_long_title_stays_inside_the_text_box():
 
 def test_cjk_title_stays_inside_the_text_box():
     # Inter has no CJK glyphs; the title must still shrink and stay in its box.
-    np = a_music_track(title="わたしはあなたのことをずっとまっています" * 6)
+    np = a_text_only(title="わたしはあなたのことをずっとまっています" * 6)
     rendered = now_playing.render(np, sample_cover(), NOW).convert("RGB")
     bbox = _column_bbox(rendered, now_playing.TEXT_X_WITH_COVER)
     if bbox is not None:
@@ -179,18 +203,27 @@ def test_cjk_title_stays_inside_the_text_box():
 
 
 def test_full_width_long_title_without_cover_clears_the_strip():
-    np = a_music_track(title="Movement " * 40)
+    np = a_text_only(title="Movement " * 40)
     rendered = now_playing.render(np, None, NOW).convert("RGB")
     bbox = _column_bbox(rendered, now_playing.TEXT_X_NO_COVER)
     assert bbox is not None
+    assert bbox[2] <= now_playing.TEXT_RIGHT
     assert bbox[3] <= now_playing.STRIP_TOP
 
 
 def test_maximal_block_with_bar_does_not_overlap_the_strip():
-    # A title that fills four lines at the largest size, with artist and album,
-    # on a long-form track that also draws the bar: the worst-case height.
-    np = NowPlaying(
-        title="Winter Tides Roll In Across The Cold Grey Bay At Dusk",
+    # A title that fills four lines at the largest size, with artist and album:
+    # the worst-case block height. The long-form track draws the bar (asserted
+    # separately), and the same title rendered without the strip and chips lets
+    # the bounds crop measure the block in isolation.
+    title = "Winter Tides Roll In Across The Cold Grey Bay At Dusk"
+    fnt, lines = now_playing.fit_title(
+        _draw(), title, now_playing.TEXT_RIGHT - now_playing.TEXT_X_WITH_COVER
+    )
+    assert fnt.size == 52 and len(lines) == 4, "fixture should hit the worst case"
+
+    long_form = NowPlaying(
+        title=title,
         artist="The Tidewater Collective Ensemble",
         album="Anthology Of Distant Harbours Deluxe",
         art_url="http://hub.local/cover/x.jpg",
@@ -201,13 +234,18 @@ def test_maximal_block_with_bar_does_not_overlap_the_strip():
         position_at=NOW,
         started_at=NOW - timedelta(seconds=3605),
     )
-    rendered = now_playing.render(np, sample_cover(), NOW).convert("RGB")
-    fnt, lines = now_playing.fit_title(
-        _draw(),
-        np.title,
-        now_playing.TEXT_RIGHT - now_playing.TEXT_X_WITH_COVER,
+    with_bar = now_playing.render(long_form, sample_cover(), NOW).convert("RGB")
+    bar_colors = {c for _, c in _strip_region(with_bar).getcolors(maxcolors=256)}
+    assert PURE["red"] in bar_colors, "the long-form track should draw its bar"
+
+    text_only = NowPlaying(
+        title=title,
+        artist="The Tidewater Collective Ensemble",
+        album="Anthology Of Distant Harbours Deluxe",
+        art_url="http://hub.local/cover/x.jpg",
+        rooms=(),
     )
-    assert fnt.size == 52 and len(lines) == 4, "fixture should hit the worst case"
+    rendered = now_playing.render(text_only, sample_cover(), NOW).convert("RGB")
     bbox = _column_bbox(rendered, now_playing.TEXT_X_WITH_COVER)
     assert bbox is not None
     assert bbox[3] <= now_playing.STRIP_TOP
@@ -219,12 +257,13 @@ def test_maximal_block_with_bar_does_not_overlap_the_strip():
 def test_title_only_track_draws_no_empty_lines():
     # A title but no artist and no album: the title sits where it would with an
     # artist and album present, with nothing drawn in their rows.
-    bare = NowPlaying(title="Static Fields", artist="", album=None, rooms=("Den",))
+    # No rooms, so the chip row does not mask where the text column stops.
+    bare = NowPlaying(title="Static Fields", artist="", album=None, rooms=())
     full = NowPlaying(
         title="Static Fields",
         artist="Someone",
         album="Something",
-        rooms=("Den",),
+        rooms=(),
     )
     bare_img = now_playing.render(bare, None, NOW).convert("RGB")
     full_img = now_playing.render(full, None, NOW).convert("RGB")
@@ -266,6 +305,48 @@ def test_end_time_without_position_uses_started_at_plus_duration():
 
 def test_end_time_is_none_without_duration():
     assert now_playing.end_time(a_no_duration_track(), NOW) is None
+
+
+# --- Progress line format ----------------------------------------------------
+
+
+def test_hms_formats_hour_plus_as_hmmss_and_shorter_as_mmss():
+    assert now_playing._hms(3610, hours=True) == "1:00:10"
+    assert now_playing._hms(5845, hours=True) == "1:37:25"
+    assert now_playing._hms(322, hours=False) == "5:22"
+    assert now_playing._hms(1390, hours=False) == "23:10"
+
+
+def test_progress_text_uses_hours_for_a_long_podcast():
+    # duration 5845 s (>= 1 h), position 3605 at NOW - 5 s while playing -> 3610.
+    assert now_playing.progress_text(a_podcast(), NOW).startswith(
+        "1:00:10 of 1:37:25"
+    )
+
+
+def test_progress_text_decides_format_by_the_total_not_the_position():
+    # A long-form track past an hour with the position still under an hour: both
+    # numbers take the h:mm:ss form because the total (the duration) decides.
+    np = NowPlaying(
+        title="Long Mix",
+        artist="DJ",
+        album="Set",
+        rooms=("Bedroom",),
+        kind="long_form",
+        duration=5400.0,
+        position=600.0,
+        position_at=NOW,
+        started_at=NOW - timedelta(seconds=600),
+    )
+    assert now_playing.progress_text(np, NOW).startswith("0:10:00 of 1:30:00")
+
+
+def test_progress_text_music_stays_in_minutes_below_an_hour():
+    assert now_playing.progress_text(a_music_track(), NOW).startswith("5:22")
+
+
+def test_progress_text_is_none_without_duration():
+    assert now_playing.progress_text(a_no_duration_track(), NOW) is None
 
 
 # --- Strip contents ----------------------------------------------------------

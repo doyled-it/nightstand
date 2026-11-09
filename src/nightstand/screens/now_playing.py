@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from nightstand.models import NowPlaying
 from nightstand.palette import PURE, dither_to_panel, to_six_colors
@@ -65,6 +65,9 @@ PROGRESS_SIZE = 26
 # The separator between the duration and the end time, spaced as the owner's
 # mockup showed it: ``23:10 of 52:00  ·  ends 9:46``.
 _SEP = "  ·  "
+# At or past an hour the duration and position read as h:mm:ss, matching the
+# approved mockup and the room-picker card; below it they read as m:ss.
+_HOUR = 3600
 
 CHIP_SIZE = 24
 CHIP_PAD_X = 12
@@ -104,7 +107,9 @@ def render(np: NowPlaying, cover: Image.Image | None, now: datetime) -> Image.Im
     return to_six_colors(canvas)
 
 
-def fit_title(draw: ImageDraw.ImageDraw, text: str, max_width: int):
+def fit_title(
+    draw: ImageDraw.ImageDraw, text: str, max_width: int
+) -> tuple[ImageFont.FreeTypeFont, list[str]]:
     """The largest title font that wraps ``text`` to at most ``TITLE_LINES``.
 
     Steps down from ``TITLE_SIZE_MAX`` to ``TITLE_SIZE_MIN`` and returns the first
@@ -146,21 +151,38 @@ def _draw_strip(draw: ImageDraw.ImageDraw, np: NowPlaying, now: datetime) -> Non
     position = np.position_now(now)
     if np.kind == "long_form" and position is not None:
         _draw_bar(draw, position / np.duration)
-        text = f"{_mmss(position)} of {_mmss(np.duration)}"
-    else:
-        text = _mmss(np.duration)
-
-    end = end_time(np, now)
-    if end is not None:
-        text += f"{_SEP}ends {clock_time(end)}"
 
     draw.text(
         (MARGIN, PROGRESS_TOP),
-        text,
+        progress_text(np, now),
         font=font("regular", PROGRESS_SIZE),
         fill=PURE["black"],
         anchor="la",
     )
+
+
+def progress_text(np: NowPlaying, now: datetime) -> str | None:
+    """The strip's duration line, or ``None`` when there is no duration.
+
+    Long-form with a known position reads ``elapsed of total``; everything else
+    reads just the total. Both numbers use the same clock format, decided by the
+    duration: ``h:mm:ss`` once the duration reaches an hour, ``m:ss`` below it,
+    so a long podcast reads ``1:00:10 of 1:37:25``. The end time is appended when
+    it can be reckoned.
+    """
+    if np.duration is None:
+        return None
+    hours = np.duration >= _HOUR
+    position = np.position_now(now)
+    if np.kind == "long_form" and position is not None:
+        text = f"{_hms(position, hours=hours)} of {_hms(np.duration, hours=hours)}"
+    else:
+        text = _hms(np.duration, hours=hours)
+
+    end = end_time(np, now)
+    if end is not None:
+        text += f"{_SEP}ends {clock_time(end)}"
+    return text
 
 
 def _draw_bar(draw: ImageDraw.ImageDraw, fraction: float) -> None:
@@ -173,9 +195,18 @@ def _draw_bar(draw: ImageDraw.ImageDraw, fraction: float) -> None:
     draw.rectangle([left, STRIP_TOP, right, bottom], outline=PURE["black"], width=2)
 
 
-def _mmss(seconds: float) -> str:
-    """``23:10`` from a number of seconds: minutes (never zero-padded) and seconds."""
+def _hms(seconds: float, *, hours: bool) -> str:
+    """Format seconds as a clock time: ``1:37:25`` with ``hours``, else ``23:10``.
+
+    Hours are never zero-padded; minutes and seconds are. The caller chooses
+    ``hours`` once for a whole line (by the total), so the elapsed and total read
+    in the same format.
+    """
     total = int(round(seconds))
+    if hours:
+        hrs, rem = divmod(total, _HOUR)
+        minutes, secs = divmod(rem, 60)
+        return f"{hrs}:{minutes:02d}:{secs:02d}"
     minutes, secs = divmod(total, 60)
     return f"{minutes}:{secs:02d}"
 
