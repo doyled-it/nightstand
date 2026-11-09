@@ -26,6 +26,32 @@ def _jpeg(
     return buf.getvalue()
 
 
+def _gray_png(values: list[int], size: tuple[int, int]) -> bytes:
+    img = Image.new("L", size)
+    img.putdata(values)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _faint_drawing_png() -> bytes:
+    """A landscape image calibrated to the Met Klimt graphite "Two Women
+    Reclining": darkest tone 169 of 255 on near-white paper, mean ~228. Its 2nd
+    percentile stays above the faint floor, so it must be skipped."""
+    w, h = 80, 48  # landscape, so the shape filter passes and faintness decides
+    total = w * h
+    dark = 120
+    return _gray_png([169] * dark + [230] * (total - dark), (w, h))
+
+
+def _ordinary_painting_png() -> bytes:
+    """A landscape image with deep shadows (tones down to black), so its 2nd
+    percentile is well below the faint floor and it is kept."""
+    w, h = 80, 48
+    total = w * h
+    return _gray_png([(i * 255) // total for i in range(total)], (w, h))
+
+
 # A valid Met primaryImage URL (the host the validator trusts) and a valid AIC
 # image_id (a UUID the validator accepts for interpolation into the IIIF URL).
 MET_IMG = "https://images.metmuseum.org/CRDImages/ep/original/DP-11.jpg"
@@ -577,6 +603,254 @@ def test_aic_parses_the_recorded_fixture(tmp_path):
     assert result.written == len(public)
     first = public[0]
     assert (tmp_path / f"aic-{first['id']}.jpg").exists()
+
+
+# --- the faintness filter skips works that would vanish on the six-ink panel ---
+
+
+def test_faint_image_is_skipped(tmp_path):
+    # A graphite drawing on cream paper (darkest tone 169) reads as nearly blank
+    # on the panel, so it is downloaded, judged too faint, discarded, and counted
+    # under skipped_faint rather than written.
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Faint", artist="A")},
+        image_body=_faint_drawing_png(),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path, min_aspect=1.0)
+
+    assert result.written == 0
+    assert result.skipped_faint == 1
+    assert result.kept == 1
+    # Nothing written and no stray .part file left behind.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ordinary_painting_is_not_skipped(tmp_path):
+    # A painting with deep shadows is not faint and is kept.
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Deep", artist="A")},
+        image_body=_ordinary_painting_png(),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path, min_aspect=1.0)
+
+    assert result.written == 1
+    assert result.skipped_faint == 0
+    assert (tmp_path / "met-11.jpg").exists()
+
+
+def test_default_min_aspect_is_1_1(tmp_path):
+    # A piece at aspect 1.2 is kept under the 1.1 default (the hub rotation
+    # cutoff); it was discarded under the old 1.3 default.
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Wide", artist="A")},
+        image_body=_jpeg(size=(60, 50)),  # aspect 1.2
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path)
+
+    assert result.written == 1
+    assert result.skipped_shape == 0
+
+
+# --- Wikimedia Commons: public-domain paintings by a named artist ---
+
+COMMONS_THUMB = (
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/"
+    "Klimt.jpg/3000px-Klimt.jpg"
+)
+
+
+def _commons_page(
+    pageid: int,
+    title: str,
+    *,
+    pd: bool = True,
+    thumb: str = COMMONS_THUMB,
+    mime: str = "image/jpeg",
+    object_name: str | None = None,
+) -> dict:
+    if pd:
+        extmeta = {
+            "LicenseShortName": {"value": "Public domain"},
+            "License": {"value": "pd"},
+        }
+    else:
+        extmeta = {
+            "LicenseShortName": {"value": "CC BY-SA 4.0"},
+            "License": {"value": "cc-by-sa-4.0"},
+            "Copyrighted": {"value": "True"},
+        }
+    if object_name:
+        extmeta["ObjectName"] = {"value": object_name}
+    return {
+        "pageid": pageid,
+        "title": title,
+        "imageinfo": [{"thumburl": thumb, "mime": mime, "extmetadata": extmeta}],
+    }
+
+
+class FakeCommons:
+    """A MockTransport handler for the Commons API + the upload image host."""
+
+    def __init__(
+        self,
+        pages: dict[str, dict],
+        *,
+        members: list[dict] | None = None,
+        subcat_members: dict[str, list[dict]] | None = None,
+        image_body: bytes | None = None,
+    ) -> None:
+        self.pages = pages
+        self.members = members or []
+        self.subcat_members = subcat_members or {}
+        self.image_body = _jpeg() if image_body is None else image_body
+        self.image_hits: list[str] = []
+        self.api_requests: list[tuple[dict, httpx.Headers]] = []
+        self.thumb_widths: list[str | None] = []
+
+    @property
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self._handle)
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        url = request.url
+        if url.host == "commons.wikimedia.org":
+            params = dict(url.params)
+            self.api_requests.append((params, request.headers))
+            if params.get("list") == "categorymembers":
+                cmtitle = params.get("cmtitle", "")
+                members = self.subcat_members.get(cmtitle, self.members)
+                return httpx.Response(
+                    200, json={"query": {"categorymembers": members}}
+                )
+            if params.get("prop") == "imageinfo":
+                self.thumb_widths.append(params.get("iiurlwidth"))
+                titles = params.get("titles", "").split("|")
+                pages = {
+                    str(i): self.pages[t]
+                    for i, t in enumerate(titles)
+                    if t in self.pages
+                }
+                return httpx.Response(200, json={"query": {"pages": pages}})
+            return httpx.Response(200, json={})
+        if url.host == "upload.wikimedia.org":
+            self.image_hits.append(str(url))
+            return httpx.Response(200, content=self.image_body)
+        return httpx.Response(404)
+
+
+def test_commons_writes_public_domain_paintings_with_sidecars(tmp_path):
+    members = [{"title": "File:Klimt - Kiss.jpg", "ns": 6}]
+    pages = {
+        "File:Klimt - Kiss.jpg": _commons_page(
+            101, "File:Klimt - Kiss.jpg", object_name="The Kiss"
+        )
+    }
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        result = fetch_museum(client, "commons", "Gustav Klimt", tmp_path)
+
+    assert result.written == 1
+    assert (tmp_path / "commons-101.jpg").read_bytes() == _jpeg()
+    assert (tmp_path / "commons-101.jpg.txt").read_text() == (
+        "The Kiss\nGustav Klimt\n"
+        "https://commons.wikimedia.org/wiki/File:Klimt_-_Kiss.jpg\n"
+    )
+
+
+def test_commons_title_falls_back_to_the_filename(tmp_path):
+    members = [{"title": "File:Gustav Klimt 046.jpg", "ns": 6}]
+    pages = {"File:Gustav Klimt 046.jpg": _commons_page(1, "File:Gustav Klimt 046.jpg")}
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        fetch_museum(client, "commons", "Gustav Klimt", tmp_path)
+
+    # Without an ObjectName the title is the filename without the File: prefix
+    # and extension.
+    assert (tmp_path / "commons-1.jpg.txt").read_text().splitlines()[0] == (
+        "Gustav Klimt 046"
+    )
+
+
+def test_commons_skips_non_public_domain(tmp_path):
+    members = [{"title": "File:Modern.jpg", "ns": 6}]
+    pages = {"File:Modern.jpg": _commons_page(102, "File:Modern.jpg", pd=False)}
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        result = fetch_museum(client, "commons", "Someone", tmp_path)
+
+    assert result.written == 0
+    assert list(tmp_path.glob("*.jpg")) == []
+    assert commons.image_hits == []  # a non-PD file is never downloaded
+
+
+def test_commons_requests_the_3000px_thumbnail(tmp_path):
+    members = [{"title": "File:A.jpg", "ns": 6}]
+    pages = {"File:A.jpg": _commons_page(1, "File:A.jpg")}
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        fetch_museum(client, "commons", "X", tmp_path)
+
+    # The thumbnail URL API is used at a ~3000px width, not a full original.
+    assert "3000" in commons.thumb_widths
+
+
+def test_commons_sends_a_descriptive_user_agent(tmp_path):
+    members = [{"title": "File:A.jpg", "ns": 6}]
+    pages = {"File:A.jpg": _commons_page(1, "File:A.jpg")}
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        fetch_museum(client, "commons", "X", tmp_path)
+
+    assert commons.api_requests, "the Commons API was not called"
+    for _params, headers in commons.api_requests:
+        ua = headers.get("User-Agent", "")
+        assert "nightstand" in ua
+        assert "github.com/doyled-it/nightstand" in ua
+
+
+def test_commons_follows_subcategories(tmp_path):
+    members = [{"title": "Category:Landscapes by X", "ns": 14}]
+    subcat = {"Category:Landscapes by X": [{"title": "File:Hill.jpg", "ns": 6}]}
+    pages = {"File:Hill.jpg": _commons_page(5, "File:Hill.jpg")}
+    commons = FakeCommons(pages, members=members, subcat_members=subcat)
+    with httpx.Client(transport=commons.transport) as client:
+        result = fetch_museum(client, "commons", "X", tmp_path)
+
+    assert result.written == 1
+    assert (tmp_path / "commons-5.jpg").exists()
+
+
+def test_commons_skips_a_drawing_by_title(tmp_path):
+    members = [{"title": "File:Klimt drawing of a seated woman.jpg", "ns": 6}]
+    pages = {
+        "File:Klimt drawing of a seated woman.jpg": _commons_page(
+            9, "File:Klimt drawing of a seated woman.jpg"
+        )
+    }
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        result = fetch_museum(client, "commons", "Klimt", tmp_path)
+
+    assert result.written == 0
+    assert commons.image_hits == []
+
+
+def test_commons_rejects_image_from_an_unexpected_host(tmp_path):
+    members = [{"title": "File:A.jpg", "ns": 6}]
+    pages = {
+        "File:A.jpg": _commons_page(
+            1, "File:A.jpg", thumb="https://evil.example.com/x.jpg"
+        )
+    }
+    commons = FakeCommons(pages, members=members)
+    with httpx.Client(transport=commons.transport) as client:
+        result = fetch_museum(client, "commons", "X", tmp_path)
+
+    assert result.written == 0
+    assert commons.image_hits == []
 
 
 # --- opt-in live smoke test, skipped unless NIGHTSTAND_LIVE_MUSEUMS is set ---

@@ -126,18 +126,27 @@ def _add_art(subparsers: argparse._SubParsersAction) -> None:
     actions.add_parser("sync", help="mirror the hub's art share to the local cache")
 
     fetch = actions.add_parser(
-        "fetch", help="download public-domain works from a museum open-access API"
+        "fetch",
+        help="download public-domain works from a museum or Wikimedia Commons",
     )
-    fetch.add_argument("source", choices=("met", "aic"), help="which museum API")
-    fetch.add_argument("--query", required=True, help="search text")
+    fetch.add_argument(
+        "source",
+        choices=("met", "aic", "commons"),
+        help="which source (commons searches paintings by the --query artist)",
+    )
+    fetch.add_argument(
+        "--query",
+        required=True,
+        help="search text, or the artist name for the commons source",
+    )
     fetch.add_argument(
         "--limit", type=int, default=20, help="most works to fetch (default 20)"
     )
     fetch.add_argument(
         "--min-aspect",
         type=float,
-        default=1.3,
-        help="discard works narrower than this width/height (default 1.3)",
+        default=1.1,
+        help="discard works narrower than this width/height (default 1.1)",
     )
     fetch.add_argument(
         "--dest",
@@ -425,7 +434,13 @@ def _art_fetch(args: argparse.Namespace) -> int:
             args.limit,
             args.min_aspect,
         )
-    failed = result.kept - result.written - result.skipped - result.skipped_shape
+    failed = (
+        result.kept
+        - result.written
+        - result.skipped
+        - result.skipped_shape
+        - result.skipped_faint
+    )
     summary = (
         f"art fetch ({args.source} {args.query!r}): "
         f"{result.found} found, {result.kept} public-domain, "
@@ -433,6 +448,8 @@ def _art_fetch(args: argparse.Namespace) -> int:
     )
     if result.skipped_shape > 0:
         summary += f", {result.skipped_shape} skipped (shape)"
+    if result.skipped_faint > 0:
+        summary += f", {result.skipped_faint} skipped (faint)"
     if failed > 0:
         summary += f", {failed} failed to download"
     print(summary)

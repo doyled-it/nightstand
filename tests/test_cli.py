@@ -402,7 +402,7 @@ def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
     assert captured["query"] == "sunset"
     assert captured["dest"] == dest
     assert captured["limit"] == 5
-    assert captured["min_aspect"] == 1.3  # the default
+    assert captured["min_aspect"] == 1.1  # the default, the hub rotation cutoff
 
 
 def test_art_fetch_min_aspect_override(tmp_path, monkeypatch):
@@ -441,5 +441,43 @@ def test_art_fetch_reports_shape_skips(tmp_path, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "2 skipped (shape)" in out
+
+
+def test_art_fetch_reports_faint_skips(tmp_path, monkeypatch, capsys):
+    def fake_fetch(client, source, query, dest, limit, min_aspect):
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(found=4, kept=3, written=2, skipped_faint=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    main(["art", "fetch", "met", "--query", "x", "--dest", str(tmp_path / "s")])
+
+    out = capsys.readouterr().out
+    assert "1 skipped (faint)" in out
+
+
+def test_art_fetch_accepts_the_commons_source(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_fetch(client, source, query, dest, limit, min_aspect):
+        captured.update(source=source, query=query)
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(written=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    code = main(
+        [
+            "art", "fetch", "commons",
+            "--query", "Gustav Klimt",
+            "--dest", str(tmp_path / "share"),
+        ]
+    )
+
+    assert code == 0
+    assert captured["source"] == "commons"
+    assert captured["query"] == "Gustav Klimt"
 
 
