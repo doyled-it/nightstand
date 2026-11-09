@@ -55,6 +55,12 @@ class Rotation:
         self._shown_at: datetime | None = None
         self._last_seq: int | None = None
         self._back: list[str] = []
+        # A scheduled advance decided by ``current`` but not yet committed: the
+        # piece to move to and the eligible set at the time it was decided. The
+        # loop confirms it with ``commit`` only when the art screen actually
+        # reaches the panel, so rotation tracks what was shown (final review
+        # Important-1). It is transient, never persisted.
+        self._pending: tuple[str, dict[str, ArtPiece]] | None = None
         # The startup grace: the first ``apply`` of this process adopts the
         # command's seq as a baseline without replaying it (Review Focus 4).
         self._first_apply = True
@@ -68,15 +74,21 @@ class Rotation:
         now: datetime | None = None,
         interval_minutes: int = 60,
     ) -> ArtPiece | None:
-        """The piece to show at ``now``, advancing once the interval has passed.
+        """Decide the piece to show at ``now``; do not commit a scheduled advance.
 
         Returns ``None`` when nothing is eligible. Otherwise it keeps the current
         piece while it is still eligible and the interval has not elapsed since it
-        was shown, and steps to the next piece in the day's shuffled order
-        otherwise.
+        was shown, and otherwise decides the next piece in the day's shuffled
+        order. A scheduled advance is only decided here, not committed: ``current``
+        records it as pending and the caller confirms it with ``commit`` once the
+        art screen actually reaches the panel. Deciding again before a commit
+        yields the same single step, never a catch-up through missed intervals,
+        since the state has not moved. Commands advance immediately through
+        ``apply``; they do not go through this pending path.
         """
         now = now if now is not None else self._clock()
         ids = {piece.id: piece for piece in eligible}
+        self._pending = None
         if not ids:
             return None
         if (
@@ -87,8 +99,25 @@ class Rotation:
             return ids[self._current_id]
         order = self._shuffled(eligible, now)
         nxt = self._next_in(order)
-        self._move_to(nxt, now, push_current=True, eligible_ids=ids)
+        self._pending = (nxt, ids)
         return ids[nxt]
+
+    def commit(self, now: datetime | None = None) -> bool:
+        """Confirm the advance ``current`` decided was shown; return if it changed.
+
+        A no-op (returns ``False``) when the last ``current`` kept the piece, so
+        the loop can call it on every art push. The piece being left is pushed on
+        the back stack, so "previous" walks what was actually drawn.
+        """
+        pending = self._pending
+        self._pending = None
+        if pending is None:
+            return False
+        now = now if now is not None else self._clock()
+        new_id, eligible_ids = pending
+        return self._move_to(
+            new_id, now, push_current=True, eligible_ids=eligible_ids
+        )
 
     # -- applying a command -------------------------------------------------- #
 
