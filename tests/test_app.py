@@ -12,6 +12,7 @@ from PIL import Image
 
 from nightstand.app import (
     AppState,
+    ArtView,
     LiveSources,
     feed_due,
     forecast_due,
@@ -19,7 +20,7 @@ from nightstand.app import (
     run_once,
     schedule_due,
 )
-from nightstand.config import Config, Location, Schedule
+from nightstand.config import Art, Config, Location, Schedule
 from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
 from nightstand.palette import PURE
@@ -53,6 +54,7 @@ class FakeSources:
         self.logo_img: Image.Image | None = None
         self.forecast_obj = None
         self.art_piece: ArtPiece | None = None
+        self.art_forced = False
         self.health_obj = Health()
 
     def now_playing(self):
@@ -71,7 +73,7 @@ class FakeSources:
         return self.forecast_obj
 
     def art(self, now):
-        return self.art_piece
+        return ArtView(piece=self.art_piece, forced=self.art_forced)
 
     def health(self):
         return self.health_obj
@@ -455,6 +457,87 @@ def test_run_once_history_write_error_logged_once_per_outage(caplog):
         if r.levelno == logging.WARNING and r.name == "nightstand.app"
     ]
     assert len(warnings) == 1
+
+
+def test_forced_art_command_pushes_in_quiet_hours(tmp_path):
+    # Someone pressed Next on the page: the redraw bypasses quiet hours.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=art_path, title="Title", id="piece.png")
+    sources.art_forced = True
+    display = RecordingDisplay()
+
+    assert run_once(AppState(), cfg, sources, display, NOON) is True
+    assert len(display.shown) == 1
+
+
+def test_scheduled_art_is_held_in_quiet_hours(tmp_path):
+    # No command: the scheduled rotation keeps the quiet-hours hold.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=art_path, title="Title", id="piece.png")
+    sources.art_forced = False
+    display = RecordingDisplay()
+
+    assert run_once(AppState(), cfg, sources, display, NOON) is False
+    assert display.shown == []
+
+
+def test_live_sources_art_follows_hub_control_and_commands(tmp_path):
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    for name in ("a.png", "b.png"):
+        Image.new("RGB", (300, 200), PURE["green"]).save(art_dir / name)
+    control = {
+        "settings": {"rotate_minutes": 60, "folders_enabled": ["Collection"]},
+        "command": {"seq": 5, "action": "next", "piece": None},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/art-control.json":
+            return httpx.Response(200, json=control)
+        raise AssertionError(f"unexpected request {request.url}")
+
+    cfg = Config(art=Art(dir=art_dir), location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=tmp_path / "state",
+            clock=lambda: NOON,
+        )
+        view = sources.art(NOON)
+        assert view.piece is not None
+        assert view.forced is False  # first command seen at startup is adopted
+
+        control["command"]["seq"] = 6
+        forced_view = sources.art(NOON)
+        assert forced_view.forced is True
+        assert forced_view.piece is not None
+        assert forced_view.piece.id != view.piece.id
+
+
+def test_live_sources_art_falls_back_to_local_config_without_hub_control(tmp_path):
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    Image.new("RGB", (300, 200), PURE["green"]).save(art_dir / "only.png")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    cfg = Config(art=Art(dir=art_dir), location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=tmp_path / "state",
+            clock=lambda: NOON,
+        )
+        view = sources.art(NOON)
+
+    assert view.piece is not None
+    assert view.piece.id == "only.png"
+    assert view.forced is False
 
 
 def test_run_once_renders_weather_in_morning_window():

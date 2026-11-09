@@ -31,12 +31,13 @@ from nightstand.config import Config
 from nightstand.display import Display, InkyDisplay
 from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
+from nightstand.rotation import Rotation
 from nightstand.screens import art as art_screen
 from nightstand.screens import game as game_screen
 from nightstand.screens import marker, placeholder, split, weather
 from nightstand.screens import now_playing as now_playing_screen
+from nightstand.sources import artcontrol, hubnowplaying, mlb
 from nightstand.sources import health as health_source
-from nightstand.sources import hubnowplaying, mlb
 from nightstand.sources import weather as weather_source
 from nightstand.sources.coverart import CoverArt
 from nightstand.sources.mlb import GameState, LogoCache
@@ -135,6 +136,18 @@ def feed_due(state: GameState | None) -> bool:
     return state.status == "live"
 
 
+@dataclass(frozen=True)
+class ArtView:
+    """The art piece to show now, and whether a command just forced the change.
+
+    ``forced`` is ``True`` only on the cycle a command (next, previous, show)
+    changed the piece, so the loop can redraw immediately even in quiet hours.
+    """
+
+    piece: ArtPiece | None
+    forced: bool = False
+
+
 class Sources(Protocol):
     """What the loop needs from the outside world, each call degrading to None."""
 
@@ -143,7 +156,7 @@ class Sources(Protocol):
     def game(self) -> GameState | None: ...
     def logo(self, team_id: int) -> Image.Image | None: ...
     def forecast(self) -> Forecast | None: ...
-    def art(self, now: datetime) -> ArtPiece | None: ...
+    def art(self, now: datetime) -> ArtView: ...
     def health(self) -> Health: ...
 
 
@@ -162,18 +175,21 @@ class LiveSources:
         client: httpx.Client,
         *,
         cache_dir: Path | None = None,
+        state_dir: Path | None = None,
         clock: Callable[[], datetime] = _aware_now,
     ) -> None:
         self._cfg = cfg
         self._client = client
         self._clock = clock
         cache = Path(cache_dir) if cache_dir is not None else cfg.paths.cache
+        state = Path(state_dir) if state_dir is not None else cfg.paths.state
         self._hub_authority = _hub_authority(cfg)
         self._covers = CoverArt(
             client, cache / "covers", f"http://{self._hub_authority}"
         )
         self._logos = LogoCache(client, cache / "logos")
         self._art = ArtLibrary(cfg.art.dir)
+        self._rotation = Rotation(state / "rotation.json", self._clock)
         # When each currently-failing source first failed, and when each health
         # URL was first unreachable (for the 15-minute grace).
         self._outages: dict[str, datetime] = {}
@@ -256,13 +272,30 @@ class LiveSources:
             self._forecast_at = now
         return self._forecast_cache
 
-    def art(self, now: datetime) -> ArtPiece | None:
-        return self._guard(
-            "art",
-            lambda: self._art.pick(
-                now, self._cfg.art.rotate_minutes, self._cfg.art.min_aspect
-            ),
+    def art(self, now: datetime) -> ArtView:
+        view = self._guard("art", lambda: self._compute_art(now))
+        return view if isinstance(view, ArtView) else ArtView(piece=None)
+
+    def _compute_art(self, now: datetime) -> ArtView:
+        """Follow the hub: read the control file, apply a command, pick a piece.
+
+        The hub's settings override the local rotation interval; a missing or bad
+        control file falls back to the local config. Only enabled folders are on
+        the device (the sync mirrors just those), so the eligible set is the local
+        library filtered by the landscape rule.
+        """
+        control = artcontrol.fetch_control(self._client, self._hub_authority)
+        interval = (
+            control.rotate_minutes
+            if control is not None
+            else self._cfg.art.rotate_minutes
         )
+        eligible = self._art.eligible(self._cfg.art.min_aspect)
+        forced = False
+        if control is not None:
+            forced = self._rotation.apply(control, eligible, now)
+        piece = self._rotation.current(eligible, now, interval)
+        return ArtView(piece=piece, forced=forced)
 
     def health(self) -> Health:
         # Guarded like the other sources so a health-poll failure degrades to
@@ -367,12 +400,17 @@ def run_once(
     np = sources.now_playing()
     game_state = sources.game()
     forecast = sources.forecast()
-    art_piece = sources.art(now)
+    art_view = sources.art(now)
+    art_piece = art_view.piece
 
     ctx = rules.Context(
         now_playing=np, game=game_state, forecast=forecast, art=art_piece
     )
     decision = rules.decide(now, cfg, ctx)
+    if art_view.forced and decision.screen == "art":
+        # A command (next, previous, show) just changed the piece: redraw now,
+        # even in quiet hours.
+        decision = replace(decision, forced=True)
 
     identity = (np.title, np.artist, np.album) if np is not None else None
     if not _settled(state, identity, now, cfg):
@@ -439,7 +477,9 @@ def run_forever(
     owned_client: httpx.Client | None = None
     if sources is None:
         owned_client = httpx.Client()
-        sources = LiveSources(cfg, owned_client, cache_dir=cfg.paths.cache)
+        sources = LiveSources(
+            cfg, owned_client, cache_dir=cfg.paths.cache, state_dir=cfg.paths.state
+        )
 
     state = AppState()
     history = ArtHistory(cfg.paths.public / "art-history.json")

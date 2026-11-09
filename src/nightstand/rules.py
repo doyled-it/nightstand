@@ -23,7 +23,6 @@ from datetime import datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from nightstand import art
 from nightstand.config import Config
 from nightstand.models import ArtPiece, NowPlaying
 from nightstand.sources.mlb import GameState, game_redraw_key
@@ -44,10 +43,16 @@ class Context:
 
 @dataclass(frozen=True)
 class Decision:
-    """The chosen screen and the key its redraw depends on."""
+    """The chosen screen and the key its redraw depends on.
+
+    ``forced`` marks a redraw an art command (next, previous, show) asked for:
+    it bypasses the quiet-hours hold, since someone pressed the button and is
+    awake. Scheduled rotation leaves it ``False`` and keeps the quiet rule.
+    """
 
     screen: Screen
     redraw_key: tuple
+    forced: bool = False
 
 
 def in_quiet_hours(now: datetime, cfg: Config) -> bool:
@@ -122,7 +127,7 @@ def _by_priority(now: datetime, cfg: Config, ctx: Context) -> Decision:
                 return Decision("game", ("game",) + game_redraw_key(ctx.game))
         elif name == "art":
             if ctx.art is not None:
-                return Decision("art", _art_key(now, cfg, ctx.art))
+                return Decision("art", _art_key(ctx.art))
     return Decision("placeholder", ("placeholder",))
 
 
@@ -131,11 +136,14 @@ def should_push(
 ) -> bool:
     """Whether to redraw for ``decision``.
 
-    False when it matches what is already showing (``last_key``). False during
-    quiet hours for every screen but the game. True otherwise.
+    False when it matches what is already showing (``last_key``). A forced
+    decision (an art command) redraws even in quiet hours. Otherwise false during
+    quiet hours for every screen but the game. True the rest of the time.
     """
     if decision.redraw_key == last_key:
         return False
+    if decision.forced:
+        return True
     if in_quiet_hours(now, cfg) and decision.screen != "game":
         return False
     return True
@@ -177,8 +185,10 @@ def _split_key(now: datetime, cfg: Config, np: NowPlaying) -> tuple:
     return _weather_key(now, cfg) + _now_playing_key(np, now, cfg)
 
 
-def _art_key(now: datetime, cfg: Config, piece: ArtPiece) -> tuple:
-    return ("art", str(piece.path), art.art_slot(now, cfg.art.rotate_minutes))
+def _art_key(piece: ArtPiece) -> tuple:
+    # The rotation state machine decides when the piece changes, so the redraw
+    # key is just the current piece's id: it changes exactly when the piece does.
+    return ("art", piece.id)
 
 
 def _local(now: datetime, cfg: Config) -> datetime:

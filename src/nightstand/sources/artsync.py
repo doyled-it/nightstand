@@ -1,24 +1,24 @@
-"""Mirror the hub's art share to a local folder.
+"""Mirror the hub's art library to a local folder, following its index.
 
-The hub serves its art folder read-only as an nginx JSON autoindex at
-``http://<hub>/art/`` (``autoindex on; autoindex_format json;``). Each entry is
-``{"name", "type": "file" | "directory", "mtime", "size"}`` where ``mtime`` is an
-HTTP-date in GMT. This mirrors that listing one level deep, files only:
+The hub's ``snaphouse-artadmin`` service publishes ``art-index.json``: the whole
+library (folders, pieces, trash) with each piece's download ``url`` and metadata.
+The frame mirrors only the pieces in enabled folders into its local art
+directory, keeping the ``folder/file`` layout the hub uses, and writes a sidecar
+caption beside each image from the index's title, artist, and source URL. This
+supersedes the old flat ``/art/`` autoindex sync.
 
-- a file not present locally is downloaded (``added``);
-- a file whose upstream size or mtime differs from the local copy is
-  re-downloaded (``updated``);
-- a local file no longer in the listing is deleted (``removed``);
-- directory entries are ignored.
+- a piece not present locally is downloaded (``added``);
+- a piece whose upstream size or mtime differs is re-downloaded (``updated``);
+- a local image or sidecar no longer listed, or in a folder no longer enabled, is
+  deleted (``removed``);
+- an emptied folder directory is removed.
 
-Each download streams to a temporary name in the destination and is renamed into
-place, so a reader (the art library) never sees a half-written file. The local
-file's mtime is set to the upstream mtime so the next sync can tell unchanged
-files apart without re-downloading them. Sidecar captions are ordinary
-``<image>.txt`` files in the same listing, so they sync by the same rules.
-
-An unreachable hub, or any failure fetching the listing, leaves the destination
-untouched: a transient outage never empties the frame's art.
+Each piece id is validated per path segment so nothing can escape the art
+directory (``..``, absolute paths, hidden folders, or more than one folder deep
+are refused). Each download streams to a temporary name and is renamed into
+place, so a reader never sees a half-written file, and is capped so a spoofed hub
+cannot fill the disk. A missing or malformed index changes nothing locally: a
+transient outage never empties the frame's art.
 """
 
 from __future__ import annotations
@@ -26,9 +26,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import quote
 
 import httpx
 
@@ -38,96 +36,124 @@ _TIMEOUT = 30.0
 # Cap each file so a compromised or spoofed hub cannot stream an unbounded body
 # onto the device and fill its disk. Art is modest in size; 64 MiB is generous.
 _MAX_FILE_BYTES = 64 * 1024 * 1024
+_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 @dataclass(frozen=True)
 class SyncResult:
-    """How many files a sync added, updated, and removed."""
+    """How many files a sync added, updated, and removed (images and sidecars)."""
 
     added: int = 0
     updated: int = 0
     removed: int = 0
 
 
-def sync_art(client: httpx.Client, base_url: str, dest: Path) -> SyncResult:
-    """Mirror the listing at ``base_url`` into ``dest``; see the module docstring."""
+def sync_index(
+    client: httpx.Client,
+    index_url: str,
+    base_url: str,
+    dest: Path,
+    enabled: set[str] | None,
+) -> SyncResult:
+    """Mirror the enabled pieces of the index at ``index_url`` into ``dest``.
+
+    ``base_url`` is the hub origin each piece's ``url`` is resolved against.
+    ``enabled`` is the set of folder names to mirror, or ``None`` to mirror every
+    folder (the fallback when the control file is missing). See the module
+    docstring for the rules.
+    """
     dest = Path(dest)
-    entries = _fetch_listing(client, base_url)
-    if entries is None:
-        # The hub is unreachable or the listing is unusable: change nothing.
+    pieces = _fetch_pieces(client, index_url)
+    if pieces is None:
+        # A missing or unusable index changes nothing locally.
         return SyncResult()
 
-    files = {
-        entry["name"]: entry
-        for entry in entries
-        if isinstance(entry, dict)
-        and entry.get("type") == "file"
-        and isinstance(entry.get("name"), str)
-        and _is_safe_name(entry["name"])
-    }
+    wanted = {}
+    for piece in pieces:
+        if not isinstance(piece, dict):
+            continue
+        pid = piece.get("id")
+        url = piece.get("url")
+        folder = piece.get("folder")
+        if not isinstance(pid, str) or not isinstance(url, str):
+            continue
+        if enabled is not None and folder not in enabled:
+            continue
+        if not _is_safe_relpath(pid):
+            continue
+        wanted[pid] = piece
 
     dest.mkdir(parents=True, exist_ok=True)
 
     added = 0
     updated = 0
-    for name, entry in files.items():
-        local = dest / name
+    kept: set[str] = set()
+    for pid, piece in wanted.items():
+        local = dest / Path(pid)
         existed = local.is_file()
-        if existed and not _differs(local, entry):
-            continue
-        if not _download(client, base_url, name, local, entry):
-            continue
-        if existed:
-            updated += 1
-        else:
-            added += 1
+        if not existed or _differs(local, piece):
+            if not _download(client, base_url, piece, local):
+                continue
+            if existed:
+                updated += 1
+            else:
+                added += 1
+        kept.add(pid)
+        if _write_sidecar(local, piece):
+            kept.add(pid + ".txt")
 
-    removed = _remove_stale(dest, set(files))
+    removed = _remove_stale(dest, kept)
     return SyncResult(added=added, updated=updated, removed=removed)
 
 
-def _fetch_listing(client: httpx.Client, base_url: str) -> list | None:
-    """The autoindex entries, or ``None`` when the hub cannot be read."""
+def _fetch_pieces(client: httpx.Client, index_url: str) -> list | None:
+    """The index's ``pieces`` list, or ``None`` when the index cannot be read."""
     try:
-        response = client.get(base_url, timeout=_TIMEOUT)
+        response = client.get(index_url, timeout=_TIMEOUT)
     except httpx.HTTPError as error:
-        logger.warning("art listing fetch failed: %s", error)
+        logger.warning("art index fetch failed: %s", error)
         return None
     if response.status_code != 200:
-        logger.warning("art listing returned %s", response.status_code)
+        logger.warning("art index returned %s", response.status_code)
         return None
     try:
         data = response.json()
     except ValueError as error:
-        logger.warning("art listing was not JSON: %s", error)
+        logger.warning("art index was not JSON: %s", error)
         return None
-    if not isinstance(data, list):
-        logger.warning("art listing was not a JSON array")
+    if not isinstance(data, dict):
+        logger.warning("art index was not a JSON object")
         return None
-    return data
+    pieces = data.get("pieces")
+    if not isinstance(pieces, list):
+        logger.warning("art index has no pieces list")
+        return None
+    return pieces
 
 
-def _differs(local: Path, entry: dict) -> bool:
-    """Whether the upstream entry's size or mtime differs from the local file."""
+def _differs(local: Path, piece: dict) -> bool:
+    """Whether the upstream piece's size or mtime differs from the local file."""
     stat = local.stat()
-    upstream_mtime = _mtime_epoch(entry.get("mtime"))
-    size = entry.get("size")
+    size = piece.get("size")
     if isinstance(size, int) and stat.st_size != size:
         return True
-    if upstream_mtime is not None and int(stat.st_mtime) != upstream_mtime:
+    mtime = piece.get("mtime")
+    if isinstance(mtime, int) and int(stat.st_mtime) != mtime:
         return True
     return False
 
 
 def _download(
-    client: httpx.Client, base_url: str, name: str, local: Path, entry: dict
+    client: httpx.Client, base_url: str, piece: dict, local: Path
 ) -> bool:
-    """Stream ``name`` to a temp file and rename it over ``local``.
+    """Stream the piece's ``url`` to a temp file and rename it over ``local``.
 
-    Returns ``True`` on success. A failed download is logged and skipped,
-    leaving any existing local copy in place.
+    Returns ``True`` on success. A failed download is logged and skipped, leaving
+    any existing local copy in place. The piece ``url`` is already percent-encoded
+    per segment, so it is appended to the origin without re-quoting.
     """
-    url = base_url.rstrip("/") + "/" + quote(name)
+    url = base_url.rstrip("/") + "/" + str(piece["url"]).lstrip("/")
+    local.parent.mkdir(parents=True, exist_ok=True)
     tmp = local.with_name(local.name + ".part")
     try:
         with client.stream(
@@ -139,10 +165,10 @@ def _download(
             timeout=_TIMEOUT,
         ) as response:
             if response.status_code != 200:
-                logger.warning("art file %s returned %s", name, response.status_code)
+                logger.warning("art file %s returned %s", url, response.status_code)
                 return False
             if _declared_length(response) > _MAX_FILE_BYTES:
-                logger.warning("art file %s declares too large a body", name)
+                logger.warning("art file %s declares too large a body", url)
                 return False
             total = 0
             exceeded = False
@@ -155,44 +181,97 @@ def _download(
                     handle.write(chunk)
             if exceeded:
                 logger.warning(
-                    "art file %s exceeded the %d byte cap", name, _MAX_FILE_BYTES
+                    "art file %s exceeded the %d byte cap", url, _MAX_FILE_BYTES
                 )
                 _unlink_quietly(tmp)
                 return False
     except httpx.HTTPError as error:
-        logger.warning("art file %s fetch failed: %s", name, error)
+        logger.warning("art file %s fetch failed: %s", url, error)
         _unlink_quietly(tmp)
         return False
 
     os.replace(tmp, local)
-    upstream_mtime = _mtime_epoch(entry.get("mtime"))
-    if upstream_mtime is not None:
-        os.utime(local, (upstream_mtime, upstream_mtime))
+    mtime = piece.get("mtime")
+    if isinstance(mtime, int):
+        os.utime(local, (mtime, mtime))
+    return True
+
+
+def _write_sidecar(local: Path, piece: dict) -> bool:
+    """Write the piece's caption sidecar from the index; return whether it exists.
+
+    The sidecar is ``<image>.txt`` beside the image: line 1 the title, line 2 the
+    artist (blank when none), line 3 an https source URL (blank when none). A
+    piece with no title gets no sidecar (and a stale one is swept away), so the
+    local caption always matches the hub's index.
+    """
+    sidecar = local.with_name(local.name + ".txt")
+    title = piece.get("title")
+    if not isinstance(title, str) or not title.strip():
+        _unlink_quietly(sidecar)
+        return False
+    artist = piece.get("artist")
+    source_url = piece.get("source_url")
+    lines = [
+        title.strip(),
+        artist.strip() if isinstance(artist, str) else "",
+        source_url.strip() if isinstance(source_url, str) else "",
+    ]
+    text = "\n".join(lines) + "\n"
+    if sidecar.is_file() and sidecar.read_text(encoding="utf-8") == text:
+        return True
+    sidecar.write_text(text, encoding="utf-8")
     return True
 
 
 def _remove_stale(dest: Path, keep: set[str]) -> int:
-    """Delete top-level files in ``dest`` not named in ``keep``; count them."""
+    """Delete images and sidecars under ``dest`` not in ``keep``; count them.
+
+    Walks the top level and one folder deep, removing any image or ``.txt`` file
+    whose relative path is not kept, then removing a user folder left empty.
+    """
     removed = 0
-    for entry in dest.iterdir():
-        if entry.is_file() and entry.name not in keep:
-            _unlink_quietly(entry)
-            removed += 1
+    for entry in list(dest.iterdir()):
+        if entry.is_file():
+            if _is_managed(entry) and entry.name not in keep:
+                _unlink_quietly(entry)
+                removed += 1
+        elif entry.is_dir() and not entry.name.startswith("."):
+            for sub in list(entry.iterdir()):
+                rel = f"{entry.name}/{sub.name}"
+                if sub.is_file() and _is_managed(sub) and rel not in keep:
+                    _unlink_quietly(sub)
+                    removed += 1
+            _remove_if_empty(entry)
     return removed
 
 
-def _is_safe_name(name: str) -> bool:
-    """Whether ``name`` is a plain filename that cannot escape the destination.
+def _is_managed(path: Path) -> bool:
+    """Whether a file is one the sync owns: an image or a sidecar caption."""
+    if path.suffix.lower() in _EXTENSIONS:
+        return True
+    return path.name.endswith(".txt")
 
-    The listing comes from the hub, which is trusted but not implicitly so: a
-    spoofed or compromised hub could return ``../`` or an absolute path to make a
-    download land outside the art cache. Only a bare filename is accepted.
+
+def _is_safe_relpath(pid: str) -> bool:
+    """Whether ``pid`` is a safe library-relative path, at most one folder deep.
+
+    The index comes from the hub, trusted but not implicitly: a spoofed index
+    could carry ``../`` or an absolute path to make a download land outside the
+    art cache. Only a bare filename, or a single folder plus a filename, both
+    plain segments, is accepted.
     """
-    if name in ("", ".", ".."):
+    segments = pid.split("/")
+    if not 1 <= len(segments) <= 2:
         return False
-    if "/" in name or "\\" in name or "\x00" in name:
-        return False
-    return name == Path(name).name
+    for segment in segments:
+        if segment in ("", ".", "..") or segment.startswith("."):
+            return False
+        if "\\" in segment or "\x00" in segment:
+            return False
+        if segment != Path(segment).name:
+            return False
+    return True
 
 
 def _declared_length(response: httpx.Response) -> int:
@@ -203,14 +282,11 @@ def _declared_length(response: httpx.Response) -> int:
     return int(raw)
 
 
-def _mtime_epoch(raw: object) -> int | None:
-    """Parse an HTTP-date ``mtime`` to integer epoch seconds, or ``None``."""
-    if not isinstance(raw, str):
-        return None
+def _remove_if_empty(directory: Path) -> None:
     try:
-        return int(parsedate_to_datetime(raw).timestamp())
-    except (TypeError, ValueError):
-        return None
+        directory.rmdir()
+    except OSError:
+        pass
 
 
 def _unlink_quietly(path: Path) -> None:

@@ -68,9 +68,21 @@ line 2 artist (may be empty), optional line 3 the museum object page as an
 `https` URL (ignored unless it parses as https). Without a sidecar the title
 falls back to the filename.
 
+Art rotation: pieces live in `art.dir` as `folder/file` (top-level files are the
+built-in "Collection"; one subfolder level is a user folder, deeper nesting and
+hidden folders are ignored), each with an `id` that is its path relative to
+`art.dir`. `ArtLibrary.eligible` lists the pieces that may rotate; `Rotation`
+(`rotation.py`) keeps the frame's place (current id, when it was shown, the last
+command's `seq`, and a 20-deep back stack) in `paths.state/rotation.json`, so a
+restart resumes rather than jumping. It advances when the hub's interval has
+passed since the last change, follows next/previous/show commands from
+`art-control.json`, and never replays a command it already applied or one seen
+for the first time at startup. A command redraw bypasses quiet hours; scheduled
+rotation does not. The art redraw key is `("art", id)`.
+
 Art shape: the display rotates only pieces at least `art.min_aspect` times wider
-than tall (default 1.3); narrower pieces stay in the share but are skipped.
-`ArtLibrary.pick` caches each image's aspect so the filter does not decode every
+than tall (default 1.3); narrower pieces stay in the library but are skipped.
+`ArtLibrary` caches each image's aspect so the filter does not decode every
 image each cycle. The art screen cover-crops with a detail-aware window
 (`screens/common.detail_crop`) that slides the crop along the overflowing axis
 toward the busiest region, so a subject near an edge is not cut. The
@@ -84,11 +96,19 @@ Keep this list current when a data source is added, and send nothing
 identifying in any request (no name, email, address, or home location).
 
 - `house.local` (the hub): the now-playing file (`now-playing.json`), the cover
-  images it points to (same-origin `/cover/...` paths), and the art share, all
+  images it points to (same-origin `/cover/...` paths), and the art library, all
   on the LAN. The frame reads now-playing only from `now-playing.json`; it makes
   no snapserver JSON-RPC call. The hub resolves all artwork now, so the frame
   does no album-cover lookup of its own (MusicBrainz and the Cover Art Archive
-  left this list).
+  left this list). For art the frame follows the hub's `snaphouse-artadmin`
+  service: the sync timer reads `art-index.json` (the whole library) and mirrors
+  the pieces in enabled folders via each piece's `/art/...` url, and the display
+  loop reads `art-control.json` each cycle for the rotation interval, which
+  folders rotate, and the next/previous/show commands. Both are keyless
+  same-origin GETs; a missing or bad file falls back to the local config and
+  changes nothing. This supersedes the old flat `/art/` autoindex sync. The
+  "Art index file" and "Art control file" contracts are in the hub's
+  `docs/cross-repo-features.md`.
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot
   logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.

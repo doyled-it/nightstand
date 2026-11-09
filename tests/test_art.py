@@ -210,6 +210,56 @@ def test_pick_returns_none_when_no_piece_meets_min_aspect(tmp_path):
     assert ArtLibrary(tmp_path).pick(NOW, 60, 1.3) is None
 
 
+def test_pieces_include_one_level_folders_with_relative_ids(tmp_path):
+    _write_image(tmp_path / "top.jpg")
+    (tmp_path / "Photos").mkdir()
+    _write_image(tmp_path / "Photos" / "beach.jpg")
+
+    pieces = {p.id: p for p in ArtLibrary(tmp_path).pieces()}
+
+    assert set(pieces) == {"top.jpg", "Photos/beach.jpg"}
+    assert pieces["Photos/beach.jpg"].path == tmp_path / "Photos" / "beach.jpg"
+
+
+def test_pieces_skip_trash_and_hidden_and_deeper_folders(tmp_path):
+    _write_image(tmp_path / "keep.jpg")
+    (tmp_path / ".trash").mkdir()
+    _write_image(tmp_path / ".trash" / "gone.jpg")
+    (tmp_path / "Photos").mkdir()
+    (tmp_path / "Photos" / "deep").mkdir()
+    _write_image(tmp_path / "Photos" / "deep" / "nested.jpg")
+
+    ids = {p.id for p in ArtLibrary(tmp_path).pieces()}
+
+    assert ids == {"keep.jpg"}
+
+
+def test_folder_sidecar_caption_is_read(tmp_path):
+    (tmp_path / "Photos").mkdir()
+    _write_image(tmp_path / "Photos" / "beach.jpg")
+    (tmp_path / "Photos" / "beach.jpg.txt").write_text("Beach Day\nMe\n")
+
+    piece = next(p for p in ArtLibrary(tmp_path).pieces() if p.id == "Photos/beach.jpg")
+
+    assert piece.title == "Beach Day"
+    assert piece.artist == "Me"
+
+
+def test_eligible_filters_portrait_pieces(tmp_path):
+    _write_sized(tmp_path / "wide.png", (300, 200))
+    (tmp_path / "Photos").mkdir()
+    _write_sized(tmp_path / "Photos" / "wide.png", (300, 200))
+    _write_sized(tmp_path / "tall.png", (200, 300))
+
+    ids = {p.id for p in ArtLibrary(tmp_path).eligible(1.3)}
+
+    assert ids == {"wide.png", "Photos/wide.png"}
+
+
+def test_eligible_empty_library_is_empty(tmp_path):
+    assert ArtLibrary(tmp_path).eligible(1.3) == []
+
+
 def test_pick_caches_aspect_and_does_not_redecode_each_cycle(tmp_path, monkeypatch):
     import nightstand.art as art_module
 
