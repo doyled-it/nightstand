@@ -1,0 +1,17 @@
+{
+  "updated_at": "2026-11-08T23:00:05-08:00",
+  "track": {
+    "title": "[AUDIO] Example Show Bonus #58 - Guest One and Guest Two",
+    "artist": "Example Show - Patreon Feed",
+    "album": "Example Show - Patreon Feed",
+    "kind": "long_form",
+    "source": "bluetooth",
+    "status": "playing",
+    "duration": 5845.0,
+    "position": 3605.0,
+    "position_at": "2026-11-08T23:00:05-08:00",
+    "started_at": "2026-11-08T22:00:00-08:00",
+    "art_url": null
+  },
+  "rooms": ["Bedroom"]
+}

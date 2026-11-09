@@ -463,7 +463,7 @@ def _render(
     art_piece: ArtPiece | None,
 ) -> Image.Image:
     if screen == "now_playing":
-        return now_playing_screen.render(np, sources.cover(np))
+        return now_playing_screen.render(np, sources.cover(np), now)
     if screen == "split":
         return split.render(forecast, np, sources.cover(np), now)
     if screen == "weather":

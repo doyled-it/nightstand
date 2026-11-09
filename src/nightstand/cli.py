@@ -36,7 +36,7 @@ from nightstand.screens import (
     split,
     weather,
 )
-from nightstand.sources import mlb, snapserver
+from nightstand.sources import hubnowplaying, mlb
 from nightstand.sources import weather as weather_source
 from nightstand.sources.artsync import sync_art
 from nightstand.sources.museums import fetch_museum
@@ -168,10 +168,13 @@ def _add_preview(subparsers: argparse._SubParsersAction) -> None:
         "--fixture",
         type=Path,
         required=True,
-        help="a recorded snapserver Server.GetStatus response",
+        help="a recorded now-playing.json document from the hub",
     )
     now_playing_screen.add_argument(
         "--cover", type=Path, help="a local image to use as the cover art"
+    )
+    now_playing_screen.add_argument(
+        "--at", help="ISO timestamp to render for (default now)"
     )
     now_playing_screen.add_argument(
         "--panel",
@@ -223,7 +226,7 @@ def _add_preview(subparsers: argparse._SubParsersAction) -> None:
         type=Path,
         required=True,
         dest="now_playing",
-        help="a recorded snapserver Server.GetStatus response",
+        help="a recorded now-playing.json document from the hub",
     )
     split_screen.add_argument(
         "--cover", type=Path, help="a local image to use as the cover art"
@@ -269,18 +272,30 @@ def _preview_art(args: argparse.Namespace) -> int:
 
 
 def _preview_now_playing(args: argparse.Namespace) -> int:
-    status = json.loads(args.fixture.read_text())
-    result = status.get("result", status)
-    np = snapserver.parse_now_playing(result)
+    doc = json.loads(args.fixture.read_text())
+    np = hubnowplaying.parse_now_playing(doc)
+    at = _preview_time(args.at)
 
     if np is None:
         rendered = placeholder.render(_NOTHING_PLAYING_MESSAGE)
     else:
         cover = Image.open(args.cover) if args.cover else None
-        rendered = now_playing.render(np, cover)
+        rendered = now_playing.render(np, cover, at)
 
     FileDisplay(args.out, panel=args.panel).show(rendered)
     return 0
+
+
+def _preview_time(at: str | None) -> datetime:
+    """An aware ``now`` for a preview: the parsed ``--at`` or the current time.
+
+    The now-playing screen extrapolates the position against an aware
+    ``position_at``, so the time it renders for must be aware too; a bare
+    timestamp is read in the local zone.
+    """
+    if at:
+        return datetime.fromisoformat(at).astimezone()
+    return datetime.now().astimezone()
 
 
 def _preview_game(args: argparse.Namespace) -> int:
@@ -322,9 +337,8 @@ def _preview_split(args: argparse.Namespace) -> int:
     at = datetime.fromisoformat(args.at) if args.at else datetime.now()
     forecast = weather_source.parse_forecast(data, at)
 
-    status = json.loads(args.now_playing.read_text())
-    result = status.get("result", status)
-    np = snapserver.parse_now_playing(result)
+    doc = json.loads(args.now_playing.read_text())
+    np = hubnowplaying.parse_now_playing(doc)
 
     if forecast is None:
         rendered = placeholder.render(_NO_WEATHER_MESSAGE)
@@ -463,11 +477,12 @@ def _render_all_screens() -> None:
         sample = Image.new("RGB", (400, 300), (0, 0, 255))
         _save(art.render(piece, sample), out / "art.png")
 
-        status = json.loads(
-            (fixtures / "snapserver" / "playing_airplay.json").read_text()
+        np_doc = json.loads(
+            (fixtures / "nowplaying" / "spec_example.json").read_text()
         )
-        np = snapserver.parse_now_playing(status["result"])
-        _save(now_playing.render(np, None), out / "now_playing.png")
+        np = hubnowplaying.parse_now_playing(np_doc)
+        selftest_now = datetime.fromisoformat("2026-11-08T21:14:03-08:00")
+        _save(now_playing.render(np, None, selftest_now), out / "now_playing.png")
 
         feed = json.loads((fixtures / "mlb" / "feed_final.json").read_text())
         state = mlb.parse_game(feed)
