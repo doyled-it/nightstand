@@ -96,7 +96,29 @@ image each cycle. The art screen cover-crops with a detail-aware window
 (`screens/common.detail_crop`) that slides the crop along the overflowing axis
 toward the busiest region, so a subject near an edge is not cut. The
 `nightstand art fetch` helper discards a downloaded work below `--min-aspect`
-(same 1.3 default) before writing it, counting it as "skipped (shape)".
+(default 1.1, matching the hub's rotation cutoff `settings.min_aspect`) before
+writing it, counting it as "skipped (shape)". It also discards a work too faint
+to read on the six-ink panel, counting it as "skipped (faint)": the image is
+reduced to a grayscale thumbnail and its 2nd-percentile luma measured, and a
+work whose darkest few percent is still lighter than the floor (150 of 255) is
+dropped. This is calibrated so a graphite drawing like the Met Klimt "Two Women
+Reclining" (darkest tone 169) is skipped while an ordinary painting is kept. It
+also discards a work too drab to see, counting it as "skipped (drab)": it
+computes the Hasler and Suesstrunk colorfulness metric
+(`M = sqrt(sd_rg^2 + sd_yb^2) + 0.3 * sqrt(mean_rg^2 + mean_yb^2)`, with
+`rg = R - G` and `yb = 0.5(R + G) - B`) on a small downscale and drops a work
+scoring below `--min-colorfulness` (default 25, `0` disables it). Calibrated from
+the live library: black-and-white etchings and lithographs (Hogarth, Daumier,
+Goya) score about 8 to 14 and the drabbest prints up to about 20, while clearly
+colorful paintings score 33 and up. All three filters run for every source
+(`met`, `aic`, `commons`).
+
+The helper also reads Wikimedia Commons (`--source commons`), where `--query` is
+an artist name: it finds paintings through the `Paintings by <artist>` category
+and its subcategories, keeps only files whose license metadata (imageinfo
+extmetadata) says public domain, skips names the metadata marks as drawings,
+sketches, or photographs, and downloads the ~3000px thumbnail rather than the
+full original.
 
 ## External hosts (allowlist)
 
@@ -139,6 +161,14 @@ identifying in any request (no name, email, address, or home location).
   IIIF images download from `www.artic.edu`. Reached only by that hand-run
   helper, never by the display loop. Keyless and public; the only request data
   is the owner's search text, nothing identifying.
+- `commons.wikimedia.org`, `upload.wikimedia.org`: Wikimedia Commons, read by
+  the `nightstand art fetch` helper for public-domain paintings by a named
+  artist. The MediaWiki API (`commons.wikimedia.org/w/api.php`) returns the
+  category members, license metadata, and thumbnail URLs; the thumbnails
+  download from `upload.wikimedia.org`. Reached only by that hand-run helper,
+  never by the display loop. Keyless and public; the request carries the
+  project's descriptive User-Agent (the public repo URL, nothing personal) and
+  the owner's artist query, nothing identifying.
 
 ## The six-color rule
 

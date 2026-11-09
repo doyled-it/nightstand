@@ -373,13 +373,14 @@ def test_art_sync_falls_back_to_all_folders_without_control(tmp_path, monkeypatc
 def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_fetch(client, source, query, dest, limit, min_aspect):
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
         captured.update(
             source=source,
             query=query,
             dest=dest,
             limit=limit,
             min_aspect=min_aspect,
+            min_colorfulness=min_colorfulness,
         )
         from nightstand.sources.museums import FetchResult
 
@@ -402,13 +403,14 @@ def test_art_fetch_passes_arguments_through(tmp_path, monkeypatch):
     assert captured["query"] == "sunset"
     assert captured["dest"] == dest
     assert captured["limit"] == 5
-    assert captured["min_aspect"] == 1.3  # the default
+    assert captured["min_aspect"] == 1.1  # the default, the hub rotation cutoff
+    assert captured["min_colorfulness"] == 25  # the default drab threshold
 
 
 def test_art_fetch_min_aspect_override(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_fetch(client, source, query, dest, limit, min_aspect):
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
         captured.update(min_aspect=min_aspect)
         from nightstand.sources.museums import FetchResult
 
@@ -430,7 +432,7 @@ def test_art_fetch_min_aspect_override(tmp_path, monkeypatch):
 
 
 def test_art_fetch_reports_shape_skips(tmp_path, monkeypatch, capsys):
-    def fake_fetch(client, source, query, dest, limit, min_aspect):
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
         from nightstand.sources.museums import FetchResult
 
         return FetchResult(found=4, kept=3, written=1, skipped=0, skipped_shape=2)
@@ -441,5 +443,81 @@ def test_art_fetch_reports_shape_skips(tmp_path, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "2 skipped (shape)" in out
+
+
+def test_art_fetch_reports_faint_skips(tmp_path, monkeypatch, capsys):
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(found=4, kept=3, written=2, skipped_faint=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    main(["art", "fetch", "met", "--query", "x", "--dest", str(tmp_path / "s")])
+
+    out = capsys.readouterr().out
+    assert "1 skipped (faint)" in out
+
+
+def test_art_fetch_reports_drab_skips(tmp_path, monkeypatch, capsys):
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(found=4, kept=3, written=2, skipped_drab=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    main(["art", "fetch", "met", "--query", "x", "--dest", str(tmp_path / "s")])
+
+    out = capsys.readouterr().out
+    assert "1 skipped (drab)" in out
+
+
+def test_art_fetch_min_colorfulness_override(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
+        captured.update(min_colorfulness=min_colorfulness)
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult()
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    code = main(
+        [
+            "art", "fetch", "met",
+            "--query", "x",
+            "--dest", str(tmp_path / "share"),
+            "--min-colorfulness", "0",
+        ]
+    )
+
+    assert code == 0
+    assert captured["min_colorfulness"] == 0
+
+
+def test_art_fetch_accepts_the_commons_source(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_fetch(client, source, query, dest, limit, min_aspect, min_colorfulness):
+        captured.update(source=source, query=query)
+        from nightstand.sources.museums import FetchResult
+
+        return FetchResult(written=1)
+
+    monkeypatch.setattr("nightstand.cli.fetch_museum", fake_fetch)
+
+    code = main(
+        [
+            "art", "fetch", "commons",
+            "--query", "Gustav Klimt",
+            "--dest", str(tmp_path / "share"),
+        ]
+    )
+
+    assert code == 0
+    assert captured["source"] == "commons"
+    assert captured["query"] == "Gustav Klimt"
 
 
