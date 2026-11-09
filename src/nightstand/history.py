@@ -9,7 +9,10 @@ frame has been displaying.
 The shape is pinned in the cross-repo contract:
 ``{"current": Piece | null, "history": [Piece, ...]}`` with ``history`` newest
 first, ``current`` the same object as ``history[0]``, and each ``Piece``
-``{"file", "title", "artist", "source_url", "shown_at"}``. A piece that is
+``{"file", "id", "title", "artist", "source_url", "shown_at"}``. ``id`` is the
+piece id relative to the art folder; it is additive to the pinned contract, so
+older entries without it still load and the page falls back to ``file``. A piece
+that is
 already current is not recorded again, so a redraw of the same piece (a health
 marker flip, say) in the same slot does not pile up duplicates. The file is
 loaded at startup so history survives restarts, and a missing or corrupt file
@@ -49,6 +52,7 @@ class ArtHistory:
         """
         entry = {
             "file": piece.path.name,
+            "id": piece.id,
             "title": piece.title,
             "artist": piece.artist,
             "source_url": piece.source_url,
@@ -120,9 +124,11 @@ def _is_valid_entry(entry: object) -> bool:
     required = ("file", "title", "shown_at")
     if not all(isinstance(entry.get(key), str) for key in required):
         return False
+    # ``id`` is additive: older entries predate it, so it is optional here and
+    # the page falls back to ``file`` when it is absent.
     return all(
         entry.get(key) is None or isinstance(entry.get(key), str)
-        for key in ("artist", "source_url")
+        for key in ("id", "artist", "source_url")
     )
 
 

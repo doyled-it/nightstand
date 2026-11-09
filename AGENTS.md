@@ -59,9 +59,18 @@ serves over the LAN. Never commit these; they are written on the device.
   atomically (0644) by the app each time the art screen is pushed to the panel.
   Shape `{"current": Piece | null, "history": [Piece, ...]}`, `current` the same
   object as `history[0]`, each `Piece` being
-  `{"file", "title", "artist", "source_url", "shown_at"}`. snaphouse consumes
+  `{"file", "id", "title", "artist", "source_url", "shown_at"}`. `id` is the
+  piece id relative to the art folder (additive to the pinned contract; older
+  entries have no `id` and the page falls back to `file`). snaphouse consumes
   it at `http://nightstand.local/nightstand/art-history.json`; the contract is
   pinned in the hub's `docs/cross-repo-features.md`.
+- `frame.png` and `frame.json`: the frame mirror, rewritten atomically (0644) by
+  the app after every successful push. `frame.png` is the image just sent to the
+  panel passed through `palette.simulate_panel` (an 800x480 PNG that reads like
+  the reflective panel); `frame.json` is `{"updated_at": iso, "screen": name}`.
+  A write failure never stops the loop; it is logged once per outage, like the
+  art history. The hub republishes both same-origin for the room-picker page's
+  live frame mirror; a missing file hides the mirror.
 
 Art sidecar captions (`<image file>.txt`, one beside each image): line 1 title,
 line 2 artist (may be empty), optional line 3 the museum object page as an

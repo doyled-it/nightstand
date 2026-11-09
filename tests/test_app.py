@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import stat
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -366,7 +367,11 @@ def test_run_once_records_art_history_when_art_pushed(tmp_path):
     Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
     sources = FakeSources()
     sources.art_piece = ArtPiece(
-        path=art_path, title="Title", artist="Artist", source_url="https://x.org/1"
+        path=art_path,
+        title="Title",
+        artist="Artist",
+        source_url="https://x.org/1",
+        id="Photos/piece.png",
     )
     history = ArtHistory(tmp_path / "art-history.json")
 
@@ -374,6 +379,7 @@ def test_run_once_records_art_history_when_art_pushed(tmp_path):
 
     data = json.loads((tmp_path / "art-history.json").read_text())
     assert data["current"]["file"] == "piece.png"
+    assert data["current"]["id"] == "Photos/piece.png"
     assert data["current"]["source_url"] == "https://x.org/1"
 
 
@@ -459,7 +465,9 @@ def test_run_once_history_write_error_logged_once_per_outage(caplog):
     warnings = [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and r.name == "nightstand.app"
+        if r.levelno == logging.WARNING
+        and r.name == "nightstand.app"
+        and "art history write failed" in r.message
     ]
     assert len(warnings) == 1
 
@@ -690,6 +698,128 @@ def test_live_sources_art_falls_back_to_local_config_without_hub_control(tmp_pat
     assert view.piece is not None
     assert view.piece.id == "only.png"
     assert view.forced is False
+
+
+def _control_min_aspect_handler(min_aspect):
+    settings = {"rotate_minutes": 60, "folders_enabled": ["Collection"]}
+    if min_aspect is not None:
+        settings["min_aspect"] = min_aspect
+    control = {"settings": settings, "command": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/art-control.json":
+            return httpx.Response(200, json=control)
+        raise AssertionError(f"unexpected request {request.url}")
+
+    return handler
+
+
+def test_live_sources_art_control_min_aspect_changes_eligibility(tmp_path):
+    # One piece at aspect 1.2. The local cutoff (1.3) excludes it, but the hub's
+    # control file lowers the cutoff to 1.1, so it becomes eligible and is shown.
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    Image.new("RGB", (240, 200), PURE["green"]).save(art_dir / "mid.png")
+
+    cfg = Config(art=Art(dir=art_dir), location=Location(timezone="UTC"))
+    with httpx.Client(
+        transport=httpx.MockTransport(_control_min_aspect_handler(1.1))
+    ) as client:
+        sources = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=tmp_path / "state",
+            clock=lambda: NOON,
+        )
+        view = sources.art(NOON)
+
+    assert view.piece is not None
+    assert view.piece.id == "mid.png"
+
+
+def test_live_sources_art_min_aspect_falls_back_to_config(tmp_path):
+    # The control file carries no min_aspect, so the local cutoff (1.5) governs
+    # and the 1.2 piece is skipped: nothing eligible.
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    Image.new("RGB", (240, 200), PURE["green"]).save(art_dir / "mid.png")
+
+    cfg = Config(
+        art=Art(dir=art_dir, min_aspect=1.5), location=Location(timezone="UTC")
+    )
+    with httpx.Client(
+        transport=httpx.MockTransport(_control_min_aspect_handler(None))
+    ) as client:
+        sources = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=tmp_path / "state",
+            clock=lambda: NOON,
+        )
+        view = sources.art(NOON)
+
+    assert view.piece is None
+
+
+def _read_mirror(public: Path) -> dict:
+    return json.loads((public / "frame.json").read_text())
+
+
+def test_run_once_writes_frame_mirror_after_push(tmp_path):
+    cfg = replace(_loop_config(), paths=replace(_loop_config().paths, public=tmp_path))
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=art_path, title="Title", artist="Artist")
+
+    assert run_once(AppState(), cfg, sources, RecordingDisplay(), NOON) is True
+
+    mirror = Image.open(tmp_path / "frame.png")
+    assert mirror.size == (WIDTH, HEIGHT)
+    meta = _read_mirror(tmp_path)
+    assert meta == {"updated_at": NOON.isoformat(), "screen": "art"}
+    assert stat.S_IMODE((tmp_path / "frame.png").stat().st_mode) == 0o644
+    assert stat.S_IMODE((tmp_path / "frame.json").stat().st_mode) == 0o644
+
+
+def test_run_once_mirror_not_written_on_a_held_cycle(tmp_path):
+    cfg = replace(_loop_config(), paths=replace(_loop_config().paths, public=tmp_path))
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    state = AppState()
+    display = RecordingDisplay()
+
+    # A changed identity is held by the settle: nothing pushes, no mirror.
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert not (tmp_path / "frame.png").exists()
+    assert not (tmp_path / "frame.json").exists()
+
+    # Once settled it pushes and the mirror records the now-playing screen.
+    settled = NOON + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, settled, None) is True
+    assert _read_mirror(tmp_path)["screen"] == "now_playing"
+
+
+def test_run_once_survives_mirror_write_error(tmp_path, caplog):
+    # public/ is a plain file, so every mirror write raises. The push must still
+    # succeed and the loop must not crash; the failure is logged once per outage.
+    blocked = tmp_path / "public"
+    blocked.write_text("not a directory")
+    cfg = replace(_loop_config(), paths=replace(_loop_config().paths, public=blocked))
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    state = AppState()
+    display = RecordingDisplay()
+
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        for i in range(3):
+            sources.art_piece = ArtPiece(path=art_path, title="Title", id=f"{i}.png")
+            assert run_once(state, cfg, sources, display, NOON) is True
+
+    assert len(display.shown) == 3
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "frame mirror write failed" in r.message
+    ]
+    assert len(warnings) == 1
 
 
 def test_run_once_renders_weather_in_morning_window():

@@ -38,18 +38,63 @@ def test_record_writes_newest_first_with_current(tmp_path):
 def test_entry_shape(tmp_path):
     path = tmp_path / "art-history.json"
     ArtHistory(path).record(
-        _piece("a.jpg", artist="Alice", source_url="https://example.org/a"), SHOWN
+        _piece(
+            "a.jpg", artist="Alice", source_url="https://example.org/a", id="a.jpg"
+        ),
+        SHOWN,
     )
 
     entry = _read(path)["history"][0]
     assert entry == {
         "file": "a.jpg",
+        "id": "a.jpg",
         "title": "a",
         "artist": "Alice",
         "source_url": "https://example.org/a",
         "shown_at": SHOWN.isoformat(),
     }
     assert "+00:00" in entry["shown_at"]
+
+
+def test_entry_carries_folder_id(tmp_path):
+    # A piece in a user folder records its full id, so the page can delete it by
+    # the exact path rather than a bare file name that may repeat across folders.
+    path = tmp_path / "art-history.json"
+    ArtHistory(path).record(
+        _piece("beach.jpg", artist=None, id="Photos/beach.jpg"), SHOWN
+    )
+
+    entry = _read(path)["history"][0]
+    assert entry["file"] == "beach.jpg"
+    assert entry["id"] == "Photos/beach.jpg"
+
+
+def test_legacy_entry_without_id_still_loads(tmp_path):
+    # Older history files have no ``id`` on their entries; they must reload
+    # cleanly so delete can fall back to ``file`` for them.
+    path = tmp_path / "art-history.json"
+    path.write_text(
+        json.dumps(
+            {
+                "current": None,
+                "history": [
+                    {
+                        "file": "old.jpg",
+                        "title": "old",
+                        "artist": None,
+                        "source_url": None,
+                        "shown_at": SHOWN.isoformat(),
+                    }
+                ],
+            }
+        )
+    )
+
+    reopened = ArtHistory(path)
+    added = reopened.record(_piece("old.jpg", id="old.jpg"), SHOWN)
+
+    assert added is False
+    assert [entry["file"] for entry in _read(path)["history"]] == ["old.jpg"]
 
 
 def test_null_artist_and_source_url_serialize_as_null(tmp_path):
