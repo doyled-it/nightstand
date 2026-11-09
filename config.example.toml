@@ -34,6 +34,12 @@ priority = ["morning", "music", "game", "art"]
 # How often the loop re-evaluates the rules, in seconds. now-playing.json is a
 # small LAN file read each cycle, so a short interval keeps progress current.
 check_seconds = 10
+# A now-playing change (including to or from nothing playing) must hold stable
+# this long before the panel redraws, so skipping tracks does not flicker it.
+settle_seconds = 20
+# Redraw bucket for a long-form track's progress, in seconds: the key changes
+# only when the extrapolated position crosses a boundary (every 10 minutes).
+progress_bucket_seconds = 600
 
 [art]
 # Local cache of the synced art collection, and how often art rotates.
