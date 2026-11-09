@@ -36,7 +36,7 @@ from nightstand.screens import game as game_screen
 from nightstand.screens import marker, placeholder, split, weather
 from nightstand.screens import now_playing as now_playing_screen
 from nightstand.sources import health as health_source
-from nightstand.sources import mlb, snapserver
+from nightstand.sources import hubnowplaying, mlb
 from nightstand.sources import weather as weather_source
 from nightstand.sources.coverart import CoverArt
 from nightstand.sources.mlb import GameState, LogoCache
@@ -48,10 +48,11 @@ logger = logging.getLogger(__name__)
 # anything to show, which in practice means the art folder is empty.
 _PLACEHOLDER_MESSAGE = "Add art to the share"
 
-# External-source polling policy. snapserver is on the LAN and polled every
-# cycle, but the MLB and Open-Meteo calls go out to the internet, so they are
-# throttled: the forecast only around the morning window, the MLB schedule a few
-# times an hour, and the live feed only while a game is actually in progress.
+# External-source polling policy. The hub's now-playing.json is a small LAN file
+# read every cycle, but the MLB and Open-Meteo calls go out to the internet, so
+# they are throttled: the forecast only around the morning window, the MLB
+# schedule a few times an hour, and the live feed only while a game is in
+# progress.
 _FORECAST_TTL = timedelta(minutes=30)
 _FORECAST_LEAD = timedelta(minutes=30)
 _SCHEDULE_TTL = timedelta(minutes=15)
@@ -59,6 +60,13 @@ _SCHEDULE_TTL = timedelta(minutes=15)
 
 def _aware_now() -> datetime:
     return datetime.now().astimezone()
+
+
+def _hub_authority(cfg: Config) -> str:
+    """The hub's HTTP authority, omitting the port when it is the default 80."""
+    host = cfg.hub.host
+    port = cfg.hub.http_port
+    return host if port == 80 else f"{host}:{port}"
 
 
 def _local(now: datetime, cfg: Config) -> datetime:
@@ -160,7 +168,10 @@ class LiveSources:
         self._client = client
         self._clock = clock
         cache = Path(cache_dir) if cache_dir is not None else cfg.paths.cache
-        self._covers = CoverArt(client, cache / "covers")
+        self._hub_authority = _hub_authority(cfg)
+        self._covers = CoverArt(
+            client, cache / "covers", f"http://{self._hub_authority}"
+        )
         self._logos = LogoCache(client, cache / "logos")
         self._art = ArtLibrary(cfg.art.dir)
         # When each currently-failing source first failed, and when each health
@@ -265,10 +276,8 @@ class LiveSources:
         return Health(problems=problems or ())
 
     def _fetch_now_playing(self) -> NowPlaying | None:
-        status = snapserver.fetch_status(
-            self._client, self._cfg.hub.host, self._cfg.hub.snapserver_port
-        )
-        return snapserver.parse_now_playing(status)
+        doc = hubnowplaying.fetch_now_playing(self._client, self._hub_authority)
+        return hubnowplaying.parse_now_playing(doc)
 
     def _fetch_forecast(self) -> Forecast | None:
         location = self._cfg.location

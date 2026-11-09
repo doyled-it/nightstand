@@ -1,0 +1,17 @@
+{
+  "updated_at": "2026-11-08T21:14:03-08:00",
+  "track": {
+    "title": "Episode 412: A Neutral Episode",
+    "artist": "The Long Version",
+    "album": "The Long Version",
+    "kind": "long_form",
+    "source": "bluetooth",
+    "status": "playing",
+    "duration": 3120.0,
+    "position": 1390.0,
+    "position_at": "2026-11-08T21:13:58-08:00",
+    "started_at": "2026-11-08T20:50:48-08:00",
+    "art_url": "/cover/3f2a9b7c.jpg"
+  },
+  "rooms": ["Bedroom", "Office"]
+}

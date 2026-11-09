@@ -83,8 +83,11 @@ nightstand reaches only these hosts, all keyless public APIs or the LAN hub.
 Keep this list current when a data source is added, and send nothing
 identifying in any request (no name, email, address, or home location).
 
-- `house.local` (the hub): snapserver JSON-RPC and the art share, on the LAN.
-- `musicbrainz.org`, `coverartarchive.org`: album cover lookup for now playing.
+- `house.local` (the hub): the now-playing file (`now-playing.json`), the cover
+  images it points to (same-origin `/cover/...` paths), the art share, and
+  snapserver JSON-RPC, all on the LAN. The hub resolves all artwork now, so the
+  frame does no album-cover lookup of its own (MusicBrainz and the Cover Art
+  Archive left this list).
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot
   logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.

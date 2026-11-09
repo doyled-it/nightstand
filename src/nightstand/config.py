@@ -40,7 +40,10 @@ class Schedule:
     morning_weekday: tuple[str, str] = ("06:00", "08:30")
     morning_weekend: tuple[str, str] = ("07:00", "09:00")
     priority: tuple[str, ...] = ("morning", "music", "game", "art")
-    check_seconds: int = 60
+    # The loop re-evaluates this often. now-playing.json is a small LAN file read
+    # each cycle, so 10 s keeps progress current between the 10-minute redraw
+    # buckets without redrawing the panel more often.
+    check_seconds: int = 10
 
 
 @dataclass(frozen=True)
