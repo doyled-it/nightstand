@@ -9,7 +9,7 @@ from nightstand.models import Health
 from nightstand.palette import PURE
 from nightstand.screens import placeholder
 
-FIXTURES = Path(__file__).parent / "fixtures" / "snapserver"
+FIXTURES = Path(__file__).parent / "fixtures" / "nowplaying"
 MLB_FIXTURES = Path(__file__).parent / "fixtures" / "mlb"
 OPENMETEO_FIXTURES = Path(__file__).parent / "fixtures" / "openmeteo"
 _EMPTY_ART_MESSAGE = "Add art to the share"
@@ -43,7 +43,9 @@ def test_preview_now_playing_renders_from_fixture(tmp_path):
             "preview",
             "now-playing",
             "--fixture",
-            str(FIXTURES / "playing_airplay.json"),
+            str(FIXTURES / "preview_podcast.json"),
+            "--at",
+            "2026-11-08T23:00:05-08:00",
             "-o",
             str(out),
         ]
@@ -208,7 +210,7 @@ def test_preview_split_renders_from_fixtures(tmp_path):
             "--fixture",
             str(OPENMETEO_FIXTURES / "forecast.json"),
             "--now-playing",
-            str(FIXTURES / "playing_airplay.json"),
+            str(FIXTURES / "spec_example.json"),
             "--at",
             "2026-11-06T06:30",
             "-o",

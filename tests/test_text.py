@@ -1,6 +1,8 @@
+from datetime import datetime
+
 from PIL import Image, ImageDraw
 
-from nightstand.text import font, wrap
+from nightstand.text import clock_time, font, wrap
 
 
 def _draw():
@@ -35,3 +37,17 @@ def test_wrap_ellipsizes_overlong_single_word():
     f = font("bold", 64)
     lines = wrap(draw, "x" * 200, f, 300, 3)
     assert all(draw.textlength(line, font=f) <= 300 for line in lines)
+
+
+def test_clock_time_is_twelve_hour_without_suffix():
+    assert clock_time(datetime(2026, 11, 8, 21, 46)) == "9:46"
+    assert clock_time(datetime(2026, 11, 8, 9, 14)) == "9:14"
+
+
+def test_clock_time_zero_pads_minutes_only():
+    assert clock_time(datetime(2026, 11, 8, 13, 5)) == "1:05"
+
+
+def test_clock_time_shows_twelve_at_noon_and_midnight():
+    assert clock_time(datetime(2026, 11, 8, 12, 0)) == "12:00"
+    assert clock_time(datetime(2026, 11, 8, 0, 30)) == "12:30"

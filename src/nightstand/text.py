@@ -9,6 +9,7 @@ when text had to be dropped.
 from __future__ import annotations
 
 import io
+from datetime import datetime
 from functools import cache
 from importlib import resources
 from typing import Literal
@@ -34,6 +35,17 @@ def _font_bytes(weight: Weight) -> bytes:
 def font(weight: Weight, size: int) -> ImageFont.FreeTypeFont:
     """Load an Inter weight at ``size`` pixels."""
     return ImageFont.truetype(io.BytesIO(_font_bytes(weight)), size)
+
+
+def clock_time(when: datetime) -> str:
+    """``9:46`` from a datetime: 12-hour wall-clock, no am/pm, zero-padded minutes.
+
+    The frame already shows wall-clock times this way on the weather screen's sun
+    row; the now-playing strip's ``ends 9:46`` uses the same style, dropping the
+    am/pm suffix since the context (a track's end, soon) makes it unambiguous.
+    """
+    hour12 = when.hour % 12 or 12
+    return f"{hour12}:{when.minute:02d}"
 
 
 def wrap(
