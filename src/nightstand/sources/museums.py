@@ -17,9 +17,10 @@ Three sources are supported:
   and a file is kept only when its license metadata says public domain and its
   name does not mark it as a drawing, sketch, or photograph.
 
-Every downloaded image is passed through a shape filter (too tall is skipped)
-and a faintness filter (tones too light to read on the six-ink panel are
-skipped), so a faint graphite drawing never reaches the share.
+Every downloaded image is passed through a shape filter (too tall is skipped),
+a faintness filter (tones too light to read on the six-ink panel are skipped),
+and a colorfulness filter (works too drab to see are skipped), so a faint
+graphite drawing or a black-and-white print never reaches the share.
 
 Each kept item is written as ``<source>-<id>.jpg`` with a sidecar
 ``<source>-<id>.jpg.txt`` caption (line 1 title, line 2 artist, line 3 the https
@@ -32,6 +33,7 @@ exists is skipped, so a rerun adds only what is new.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +59,12 @@ _DEFAULT_MIN_ASPECT = 1.1
 # 169 of 255): its 2nd percentile sits above the floor and it is skipped, while
 # a painting with real shadows sits well below it and is kept.
 _FAINT_FLOOR = 150
+# A work whose Hasler-Suesstrunk colorfulness falls below this reads as drab on
+# the six-ink panel: black-and-white etchings and lithographs score about 8 to
+# 14 and the drabbest prints up to about 20, while clearly colorful paintings
+# score 33 and up, so 25 cleanly separates them. --min-colorfulness overrides it
+# and 0 disables the filter.
+_DEFAULT_MIN_COLORFULNESS = 25
 # Cap each image so a hostile or broken response cannot stream an unbounded body
 # onto the device. Museum originals are large but comfortably under this.
 _MAX_BYTES = 64 * 1024 * 1024
@@ -116,10 +124,11 @@ class FetchResult:
     were kept as public-domain works with a usable image (capped at the limit),
     ``written`` how many images this run downloaded, ``skipped`` how many kept
     works were already on disk, ``skipped_shape`` how many downloaded images were
-    discarded for being too tall, and ``skipped_faint`` how many were discarded
-    for being too faint to read on the panel. A kept work that is none of
-    written, skipped, skipped_shape, or skipped_faint failed to download; its
-    HTTP status is logged.
+    discarded for being too tall, ``skipped_faint`` how many were discarded for
+    being too faint to read on the panel, and ``skipped_drab`` how many were
+    discarded for being too colorless. A kept work that is none of written,
+    skipped, skipped_shape, skipped_faint, or skipped_drab failed to download;
+    its HTTP status is logged.
     """
 
     found: int = 0
@@ -128,6 +137,7 @@ class FetchResult:
     skipped: int = 0
     skipped_shape: int = 0
     skipped_faint: int = 0
+    skipped_drab: int = 0
 
 
 @dataclass(frozen=True)
@@ -148,11 +158,15 @@ def fetch_museum(
     dest: Path,
     limit: int = _DEFAULT_LIMIT,
     min_aspect: float = _DEFAULT_MIN_ASPECT,
+    min_colorfulness: float = _DEFAULT_MIN_COLORFULNESS,
 ) -> FetchResult:
     """Fetch up to ``limit`` public-domain works for ``query`` into ``dest``.
 
     A downloaded image narrower than ``min_aspect`` (width/height) is discarded
-    and counted under ``skipped_shape``, so only landscape works reach the share.
+    and counted under ``skipped_shape``, one too faint to read under
+    ``skipped_faint``, and one whose colorfulness is below ``min_colorfulness``
+    under ``skipped_drab`` (a ``min_colorfulness`` of 0 disables that filter), so
+    only landscape works that will actually read on the panel reach the share.
     """
     dest = Path(dest)
     if source == "met":
@@ -174,6 +188,7 @@ def fetch_museum(
     skipped = 0
     skipped_shape = 0
     skipped_faint = 0
+    skipped_drab = 0
     for item in items:
         image_path = dest / f"{source}-{item.object_id}.jpg"
         if image_path.exists():
@@ -190,6 +205,10 @@ def fetch_museum(
             _unlink_quietly(image_path)
             skipped_faint += 1
             continue
+        if _is_drab(image_path, min_colorfulness):
+            _unlink_quietly(image_path)
+            skipped_drab += 1
+            continue
         _write_caption(image_path, item.title, item.artist, item.source_url)
         written += 1
     return FetchResult(
@@ -199,6 +218,7 @@ def fetch_museum(
         skipped=skipped,
         skipped_shape=skipped_shape,
         skipped_faint=skipped_faint,
+        skipped_drab=skipped_drab,
     )
 
 
@@ -637,6 +657,55 @@ def _tonal_floor(path: Path) -> int | None:
         if cumulative > target:
             return value
     return 255
+
+
+def _is_drab(path: Path, threshold: float) -> bool:
+    """Whether the image is too colorless to see on the six-ink panel.
+
+    A ``threshold`` of 0 (or less) disables the check. An image that cannot be
+    read is not called drab (it already decoded once during download), so it
+    passes through to the normal failure path.
+    """
+    if threshold <= 0:
+        return False
+    score = _colorfulness(path)
+    return score is not None and score < threshold
+
+
+def _colorfulness(path: Path) -> float | None:
+    """The Hasler-Suesstrunk colorfulness of a small downscale, or ``None``.
+
+    ``M = sqrt(sd_rg^2 + sd_yb^2) + 0.3 * sqrt(mean_rg^2 + mean_yb^2)`` with
+    ``rg = R - G`` and ``yb = 0.5(R + G) - B`` (Hasler and Suesstrunk, "Measuring
+    colourfulness in natural images", 2003). A near-grayscale print scores in the
+    single digits, a vivid painting in the tens.
+    """
+    try:
+        with Image.open(path) as image:
+            rgb = image.convert("RGB")
+            rgb.thumbnail((64, 64))
+            data = rgb.tobytes()
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
+        return None
+    count = len(data) // 3
+    if count == 0:
+        return None
+    sum_rg = sum_rg2 = sum_yb = sum_yb2 = 0.0
+    for i in range(0, count * 3, 3):
+        red, green, blue = data[i], data[i + 1], data[i + 2]
+        rg = red - green
+        yb = 0.5 * (red + green) - blue
+        sum_rg += rg
+        sum_rg2 += rg * rg
+        sum_yb += yb
+        sum_yb2 += yb * yb
+    mean_rg = sum_rg / count
+    mean_yb = sum_yb / count
+    var_rg = max(sum_rg2 / count - mean_rg * mean_rg, 0.0)
+    var_yb = max(sum_yb2 / count - mean_yb * mean_yb, 0.0)
+    std_root = math.sqrt(var_rg + var_yb)
+    mean_root = math.sqrt(mean_rg * mean_rg + mean_yb * mean_yb)
+    return std_root + 0.3 * mean_root
 
 
 def _write_caption(

@@ -19,10 +19,27 @@ AIC_IDENTITY = "nightstand (https://github.com/doyled-it/nightstand)"
 
 
 def _jpeg(
-    color: tuple[int, int, int] = (20, 40, 60), size: tuple[int, int] = (16, 8)
+    color: tuple[int, int, int] | None = None, size: tuple[int, int] = (16, 8)
 ) -> bytes:
+    """A small valid JPEG stand-in image.
+
+    With no explicit ``color`` the image is a two-tone red/blue split: it has dark
+    tones (so the faintness filter keeps it) and real chroma (so the colorfulness
+    filter keeps it), which is what the fetch tests expect of a kept work.
+    """
     buf = io.BytesIO()
-    Image.new("RGB", size, color).save(buf, format="JPEG")
+    if color is not None:
+        image = Image.new("RGB", size, color)
+    else:
+        w, h = size
+        pixels = [
+            (230, 40, 40) if x * 2 < w else (40, 40, 230)
+            for y in range(h)
+            for x in range(w)
+        ]
+        image = Image.new("RGB", size)
+        image.putdata(pixels)
+    image.save(buf, format="JPEG")
     return buf.getvalue()
 
 
@@ -32,6 +49,36 @@ def _gray_png(values: list[int], size: tuple[int, int]) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _rgb_png(pixels: list[tuple[int, int, int]], size: tuple[int, int]) -> bytes:
+    img = Image.new("RGB", size)
+    img.putdata(pixels)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _drab_print_png() -> bytes:
+    """A near-grayscale lithograph: a slight uniform tint and low chroma over a
+    dark-to-light gradient (so it is not faint). Its Hasler-Suesstrunk score lands
+    in the single-digit/low-teens band of real B&W prints, well below 25."""
+    w, h = 80, 48
+    total = w * h
+    pixels = []
+    for i in range(total):
+        v = (i * 230) // total  # 0..229, so there are dark tones
+        pixels.append((min(v + 25, 255), v, max(v - 15, 0)))
+    return _rgb_png(pixels, (w, h))
+
+
+def _colorful_painting_png() -> bytes:
+    """Saturated hues over dark tones: a high chroma score (well above 33) and not
+    faint, so it passes every filter."""
+    w, h = 80, 48
+    hues = [(220, 30, 30), (30, 180, 30), (30, 30, 220), (220, 200, 20)]
+    pixels = [hues[(x // 10 + y // 10) % 4] for y in range(h) for x in range(w)]
+    return _rgb_png(pixels, (w, h))
 
 
 def _faint_drawing_png() -> bytes:
@@ -627,17 +674,80 @@ def test_faint_image_is_skipped(tmp_path):
 
 
 def test_ordinary_painting_is_not_skipped(tmp_path):
-    # A painting with deep shadows is not faint and is kept.
+    # A painting with deep shadows is not faint and is kept. The fixture is
+    # grayscale, so the colorfulness filter is disabled to isolate faintness.
     met = FakeMet(
         {11: _met_object(11, public=True, image=MET_IMG, title="Deep", artist="A")},
         image_body=_ordinary_painting_png(),
     )
     with httpx.Client(transport=met.transport) as client:
-        result = fetch_museum(client, "met", "x", tmp_path, min_aspect=1.0)
+        result = fetch_museum(
+            client, "met", "x", tmp_path, min_aspect=1.0, min_colorfulness=0
+        )
 
     assert result.written == 1
     assert result.skipped_faint == 0
     assert (tmp_path / "met-11.jpg").exists()
+
+
+# --- the colorfulness filter skips works too drab to see on the six-ink panel ---
+
+
+def test_drab_image_is_skipped(tmp_path):
+    # A near-grayscale print scores below the colorfulness threshold, so it is
+    # downloaded, judged too drab, discarded, and counted under skipped_drab.
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Drab", artist="A")},
+        image_body=_drab_print_png(),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path, min_aspect=1.0)
+
+    assert result.written == 0
+    assert result.skipped_drab == 1
+    assert result.kept == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_colorful_image_is_kept(tmp_path):
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Vivid", artist="A")},
+        image_body=_colorful_painting_png(),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(client, "met", "x", tmp_path, min_aspect=1.0)
+
+    assert result.written == 1
+    assert result.skipped_drab == 0
+    assert (tmp_path / "met-11.jpg").exists()
+
+
+def test_min_colorfulness_zero_disables_the_filter(tmp_path):
+    met = FakeMet(
+        {11: _met_object(11, public=True, image=MET_IMG, title="Drab", artist="A")},
+        image_body=_drab_print_png(),
+    )
+    with httpx.Client(transport=met.transport) as client:
+        result = fetch_museum(
+            client, "met", "x", tmp_path, min_aspect=1.0, min_colorfulness=0
+        )
+
+    assert result.written == 1
+    assert result.skipped_drab == 0
+
+
+def test_colorfulness_metric_separates_prints_from_paintings(tmp_path):
+    # The calibration bands: B&W prints score in the single digits to low teens,
+    # clearly colorful paintings score 33 and up.
+    from nightstand.sources import museums
+
+    drab = tmp_path / "drab.png"
+    drab.write_bytes(_drab_print_png())
+    vivid = tmp_path / "vivid.png"
+    vivid.write_bytes(_colorful_painting_png())
+
+    assert museums._colorfulness(drab) < 25
+    assert museums._colorfulness(vivid) >= 33
 
 
 def test_default_min_aspect_is_1_1(tmp_path):

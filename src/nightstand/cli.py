@@ -149,6 +149,12 @@ def _add_art(subparsers: argparse._SubParsersAction) -> None:
         help="discard works narrower than this width/height (default 1.1)",
     )
     fetch.add_argument(
+        "--min-colorfulness",
+        type=float,
+        default=25.0,
+        help="discard works drabber than this colorfulness (default 25, 0 off)",
+    )
+    fetch.add_argument(
         "--dest",
         type=Path,
         required=True,
@@ -433,6 +439,7 @@ def _art_fetch(args: argparse.Namespace) -> int:
             args.dest,
             args.limit,
             args.min_aspect,
+            args.min_colorfulness,
         )
     failed = (
         result.kept
@@ -440,6 +447,7 @@ def _art_fetch(args: argparse.Namespace) -> int:
         - result.skipped
         - result.skipped_shape
         - result.skipped_faint
+        - result.skipped_drab
     )
     summary = (
         f"art fetch ({args.source} {args.query!r}): "
@@ -450,6 +458,8 @@ def _art_fetch(args: argparse.Namespace) -> int:
         summary += f", {result.skipped_shape} skipped (shape)"
     if result.skipped_faint > 0:
         summary += f", {result.skipped_faint} skipped (faint)"
+    if result.skipped_drab > 0:
+        summary += f", {result.skipped_drab} skipped (drab)"
     if failed > 0:
         summary += f", {failed} failed to download"
     print(summary)

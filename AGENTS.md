@@ -102,8 +102,16 @@ to read on the six-ink panel, counting it as "skipped (faint)": the image is
 reduced to a grayscale thumbnail and its 2nd-percentile luma measured, and a
 work whose darkest few percent is still lighter than the floor (150 of 255) is
 dropped. This is calibrated so a graphite drawing like the Met Klimt "Two Women
-Reclining" (darkest tone 169) is skipped while an ordinary painting is kept. The
-filter runs for every source (`met`, `aic`, `commons`).
+Reclining" (darkest tone 169) is skipped while an ordinary painting is kept. It
+also discards a work too drab to see, counting it as "skipped (drab)": it
+computes the Hasler and Suesstrunk colorfulness metric
+(`M = sqrt(sd_rg^2 + sd_yb^2) + 0.3 * sqrt(mean_rg^2 + mean_yb^2)`, with
+`rg = R - G` and `yb = 0.5(R + G) - B`) on a small downscale and drops a work
+scoring below `--min-colorfulness` (default 25, `0` disables it). Calibrated from
+the live library: black-and-white etchings and lithographs (Hogarth, Daumier,
+Goya) score about 8 to 14 and the drabbest prints up to about 20, while clearly
+colorful paintings score 33 and up. All three filters run for every source
+(`met`, `aic`, `commons`).
 
 The helper also reads Wikimedia Commons (`--source commons`), where `--query` is
 an artist name: it finds paintings through the `Paintings by <artist>` category
