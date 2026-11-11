@@ -137,12 +137,16 @@ identifying in any request (no name, email, address, or home location).
   loop reads `art-control.json` each cycle for the rotation interval, which
   folders rotate, and the next/previous/show commands. Both are keyless
   same-origin GETs; a missing or bad file falls back to the local config and
-  changes nothing. This supersedes the old flat `/art/` autoindex sync. The
-  "Art index file" and "Art control file" contracts are in the hub's
-  `docs/cross-repo-features.md`. The display loop also reads
+  changes nothing. This supersedes the old flat `/art/` autoindex sync. A command
+  carries an optional `frame`: the frame acts on it only when `frame` is absent or
+  `null` (the compatible default, every frame) or equals this frame's own id
+  (`[frame] id`, defaulting to the hostname), so a command aimed at one frame
+  never moves another. The "Art index file" and "Art control file" contracts are
+  in the hub's `docs/cross-repo-features.md`. The display loop also reads
   `frame-control.json` each cycle (same `snaphouse-artadmin` service, keyless
-  same-origin GET) for the frame settings and the pin; a missing, stale, or
-  malformed file falls back to the local config and no pin. The settings are the
+  same-origin GET) for the frame settings and this frame's own quiet hours and
+  pin; a missing, stale, or malformed file falls back to the local config and no
+  pin. The shared settings (`settings`, applied to every frame) are the
   now-playing kinds the frame shows (`music`, `podcast`, `audiobook`; default
   `["music"]`, so podcasts and audiobooks stay off the frame unless enabled), the
   quiet-hours window, the morning-weather window and its on/off flag, and the
@@ -155,13 +159,19 @@ identifying in any request (no name, email, address, or home location).
   never reaches the schedule clock: quiet hours, the morning window, and redraw
   gating stay on the frame's own local timezone (the local config, else the
   system zone), so a city in another zone cannot shift when the panel sleeps or
-  wakes. The frame derives a now-playing category from the track's `kind` and
-  `genre` (`rules.category`) to apply the kinds filter. The pin holds one screen
-  (the art piece, the weather, or now playing) for a while or until unpinned,
-  ignoring the normal schedule; a new pin (a higher `seq`) redraws once even in
-  quiet hours, a live game still wins over a pin, and a pinned art piece that has
-  been deleted falls back to the schedule. The "Frame control file" contract is
-  in the hub's `docs/cross-repo-features.md`.
+  wakes. Each frame also carries its own slice in the control file's `frames` map,
+  keyed by the inventory frame ids: its own quiet-hours override (`null` to keep
+  the shared window, `{"enabled": false}` for no quiet hours, or a `{"start",
+  "end"}` window) and its own pin, so silencing or pinning one frame never moves
+  another. A document with no `frames` map is the old single-frame shape, whose
+  top-level `pin` the frame treats as the nightstand's, so the nightstand keeps
+  working whichever side updates first. The frame derives a now-playing category
+  from the track's `kind` and `genre` (`rules.category`) to apply the kinds
+  filter. The pin holds one screen (the art piece, the weather, or now playing)
+  for a while or until unpinned, ignoring the normal schedule; a new pin (a higher
+  `seq`) redraws once even in quiet hours, a live game still wins over a pin, and a
+  pinned art piece that has been deleted falls back to the schedule. The "Frame
+  control file" contract is in the hub's `docs/cross-repo-features.md`.
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot
   logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.

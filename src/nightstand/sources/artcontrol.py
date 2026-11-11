@@ -54,12 +54,17 @@ class ArtControl:
     min_aspect: float | None = None
 
 
-def fetch_control(client: httpx.Client, host: str) -> ArtControl | None:
+def fetch_control(
+    client: httpx.Client, host: str, frame_id: str
+) -> ArtControl | None:
     """Read ``http://{host}/art-control.json`` into an ``ArtControl``, or ``None``.
 
     ``host`` is the hub's HTTP authority (host, or host:port off the default port
-    80). Returns ``None`` for anything the frame cannot use, which the caller
-    treats as "no hub control, use the local config".
+    80). ``frame_id`` is this frame's inventory id: a command scoped to a
+    different frame reads as no command, so it never moves this frame, while a
+    command with no ``frame`` reaches every frame (the compatible default). The
+    settings are shared across frames. Returns ``None`` for anything the frame
+    cannot use, which the caller treats as "no hub control, use the local config".
     """
     doc = _get(client, host)
     if not isinstance(doc, dict):
@@ -81,7 +86,7 @@ def fetch_control(client: httpx.Client, host: str) -> ArtControl | None:
     raw_aspect = settings.get("min_aspect")
     min_aspect = raw_aspect if _is_aspect(raw_aspect) else None
 
-    seq, action, piece = _command(doc.get("command"))
+    seq, action, piece = _command(doc.get("command"), frame_id)
     return ArtControl(
         rotate_minutes=rotate_minutes,
         folders_enabled=folders_enabled,
@@ -92,9 +97,18 @@ def fetch_control(client: httpx.Client, host: str) -> ArtControl | None:
     )
 
 
-def _command(command: object) -> tuple[int | None, str | None, str | None]:
-    """The command's ``(seq, action, piece)``, each ``None`` when absent or bad."""
+def _command(
+    command: object, frame_id: str
+) -> tuple[int | None, str | None, str | None]:
+    """The command's ``(seq, action, piece)``, each ``None`` when absent or bad.
+
+    A command scoped to a different frame reads as no command: its ``frame`` is
+    present and is not this frame's id, so returning all ``None`` leaves the
+    rotation state machine untouched, exactly as if the field were absent.
+    """
     if not isinstance(command, dict):
+        return None, None, None
+    if not _command_applies(command.get("frame"), frame_id):
         return None, None, None
     raw_seq = command.get("seq")
     # bool is an int subclass but never a sequence number.
@@ -105,6 +119,16 @@ def _command(command: object) -> tuple[int | None, str | None, str | None]:
     raw_piece = command.get("piece")
     piece = raw_piece if isinstance(raw_piece, str) else None
     return seq, action, piece
+
+
+def _command_applies(frame: object, frame_id: str) -> bool:
+    """Whether a command scoped to ``frame`` reaches this frame.
+
+    An absent or ``null`` ``frame`` reaches every frame (the compatible default);
+    otherwise only the frame whose id matches. A malformed, non-matching ``frame``
+    (a number, say) is not this frame's id, so the command is left alone.
+    """
+    return frame is None or frame == frame_id
 
 
 def _is_seq(value: object) -> bool:

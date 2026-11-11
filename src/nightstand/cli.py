@@ -437,7 +437,7 @@ def _art_sync(args: argparse.Namespace) -> int:
     base_url = f"http://{authority}"
     dest = config.art.dir
     with httpx.Client() as client:
-        control = artcontrol.fetch_control(client, authority)
+        control = artcontrol.fetch_control(client, authority, config.frame.id)
         enabled = set(control.folders_enabled) if control is not None else None
         result = sync_index(client, index_url, base_url, dest, enabled)
     print(

@@ -8,6 +8,13 @@
 # Keep anything identifying (your real coordinates, in particular) in the local
 # config only. Never commit it. The placeholders here are deliberately generic.
 
+[frame]
+# This frame's inventory id, matching ^[a-z][a-z0-9-]{0,31}$. It selects this
+# frame's slice of the hub's per-frame art commands and frame control (its own
+# quiet hours and pin). Leave it unset to use the system hostname (the office
+# host becomes "office"); set it only when the hostname is not the inventory key.
+# id = "nightstand"
+
 [hub]
 # The snaphouse hub that serves audio status and the art share.
 host = "house.local"

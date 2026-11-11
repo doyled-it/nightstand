@@ -9,12 +9,33 @@ exist leaves the defaults untouched, so the app always has a complete Config.
 from __future__ import annotations
 
 import os
+import re
+import socket
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 _LOCAL_CONFIG = Path("/etc/nightstand/local.toml")
 _STATE_ROOT = Path("/var/lib/nightstand")
+
+#: An inventory frame id: a lowercase label, the same pattern the hub validates
+#: on every write. The frame's own id keys its slice of the hub's per-frame art
+#: commands and frame control.
+_FRAME_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+
+#: The fallback frame id when the hostname cannot be sanitized to a valid key.
+#: It is the historical single-frame host, so an odd hostname degrades to the
+#: nightstand rather than crashing the frame at startup; an operator with an
+#: unusual hostname sets [frame] id explicitly.
+_DEFAULT_FRAME_ID = "nightstand"
+
+
+@dataclass(frozen=True)
+class Frame:
+    # The frame's inventory id, matching ^[a-z][a-z0-9-]{0,31}$. An empty id means
+    # "derive from the system hostname", resolved in load_config. It selects this
+    # frame's slice of the hub's per-frame art commands and frame control.
+    id: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,6 +109,7 @@ class HealthConfig:
 
 @dataclass(frozen=True)
 class Config:
+    frame: Frame = field(default_factory=Frame)
     hub: Hub = field(default_factory=Hub)
     location: Location = field(default_factory=Location)
     schedule: Schedule = field(default_factory=Schedule)
@@ -103,7 +125,40 @@ def load_config(path: Path | None = None) -> Config:
     source = _resolve_source(path)
     if source is not None and source.exists():
         config = _overlay(config, tomllib.loads(source.read_text()))
-    return _normalize(config)
+    return _resolve_frame_id(_normalize(config))
+
+
+def _resolve_frame_id(config: Config) -> Config:
+    """Fill in and validate the frame's inventory id.
+
+    An explicit ``[frame] id`` must be a valid inventory key; an invalid one is a
+    configuration error and raises, so it is caught at startup rather than
+    silently never matching the hub's per-frame documents. With no explicit id
+    the hostname supplies it, sanitized to a valid key and never raising, so an
+    odd hostname cannot keep the frame from booting (Review Focus 4).
+    """
+    explicit = config.frame.id
+    if explicit:
+        if not _FRAME_ID_PATTERN.match(explicit):
+            raise ValueError(
+                f"[frame] id {explicit!r} is not a valid inventory key: it must "
+                "match ^[a-z][a-z0-9-]{0,31}$"
+            )
+        return config
+    return replace(config, frame=replace(config.frame, id=_hostname_frame_id()))
+
+
+def _hostname_frame_id() -> str:
+    """A valid inventory id derived from the system hostname.
+
+    Takes the first label, lowercases it, replaces any character outside the key
+    alphabet with a hyphen, and drops leading non-letters: ``Nightstand.local``
+    becomes ``nightstand``. A hostname that cannot yield a valid key falls back to
+    the default rather than raising.
+    """
+    label = socket.gethostname().split(".")[0].lower()
+    cleaned = re.sub(r"[^a-z0-9-]", "-", label).lstrip("0123456789-")[:32]
+    return cleaned if _FRAME_ID_PATTERN.match(cleaned) else _DEFAULT_FRAME_ID
 
 
 def _normalize(config: Config) -> Config:

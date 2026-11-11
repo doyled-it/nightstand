@@ -232,7 +232,9 @@ class LiveSources:
         # keeps a surprise from stopping the loop.
         return self._guard(
             "frame_control",
-            lambda: framecontrol.fetch_control(self._client, self._hub_authority),
+            lambda: framecontrol.fetch_control(
+                self._client, self._hub_authority, self._cfg.frame.id
+            ),
         )
 
     def now_playing(self) -> NowPlaying | None:
@@ -370,7 +372,9 @@ class LiveSources:
         and the rotation does not advance; a pinned piece that has been deleted
         from the library falls back to the normal schedule (Review Focus 4).
         """
-        control = artcontrol.fetch_control(self._client, self._hub_authority)
+        control = artcontrol.fetch_control(
+            self._client, self._hub_authority, self._cfg.frame.id
+        )
         # The hub's cutoff is the one source of truth for every frame; the local
         # config is only the fallback when the hub does not set one.
         min_aspect = self._cfg.art.min_aspect
