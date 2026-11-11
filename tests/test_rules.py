@@ -20,6 +20,7 @@ from nightstand.sources.framecontrol import (
     FrameSettings,
     MorningWeather,
     Pin,
+    WeatherLocation,
 )
 from nightstand.sources.mlb import GameState, Team
 from nightstand.sources.weather import Forecast
@@ -492,6 +493,29 @@ def test_disabling_morning_weather_drops_the_morning_screen():
     now = la(2026, 11, 9, 6, 30)  # inside the default weekday morning window
     decision = rules.decide(now, eff, Context(forecast=a_forecast()))
     assert decision.screen != "weather"
+
+
+def test_effective_config_leaves_the_schedule_clock_local_for_a_weather_city():
+    # The hub's weather city must not reach the schedule clock: effective_config
+    # leaves location (and so quiet hours / the morning window) exactly as the
+    # local config has it. The forecast-only override lives in LiveSources.forecast.
+    cfg = make_config()
+    settings = FrameSettings(
+        now_playing_kinds=("music",),
+        quiet_hours=None,
+        morning_weather=None,
+        weather_location=WeatherLocation(
+            name="London, England, United Kingdom",
+            latitude=51.51,
+            longitude=-0.13,
+            timezone="Europe/London",
+        ),
+    )
+    eff = rules.effective_config(cfg, settings)
+    assert eff.location == cfg.location
+    assert eff.schedule == cfg.schedule
+    # With no schedule changes either, the config is returned unchanged.
+    assert eff is cfg
 
 
 # --- pinned decisions --------------------------------------------------------

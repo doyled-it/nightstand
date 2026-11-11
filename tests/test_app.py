@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 from PIL import Image
 
+from nightstand import rules
 from nightstand.app import (
     AppState,
     ArtView,
@@ -33,6 +34,7 @@ from nightstand.sources.framecontrol import (
     FrameSettings,
     MorningWeather,
     Pin,
+    WeatherLocation,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -77,6 +79,7 @@ class FakeSources:
         # Records the last pin hints the loop passed down, so a test can assert
         # the pin reached the source calls.
         self.forecast_pinned_weather = None
+        self.forecast_weather_location = _UNSET
         self.art_pinned_piece = _UNSET
 
     def now_playing(self):
@@ -94,8 +97,11 @@ class FakeSources:
     def frame_control(self):
         return self.control
 
-    def forecast(self, now=None, cfg=None, *, pinned_weather=False):
+    def forecast(
+        self, now=None, cfg=None, *, weather_location=None, pinned_weather=False
+    ):
         self.forecast_pinned_weather = pinned_weather
+        self.forecast_weather_location = weather_location
         return self.forecast_obj
 
     def art(self, now, pinned_piece=None):
@@ -1058,6 +1064,224 @@ def test_live_sources_forecast_disabled_without_coordinates(tmp_path):
     sources = LiveSources(cfg, _HubClient({}), cache_dir=tmp_path)
 
     assert sources.forecast() is None
+
+
+class _ForecastClient:
+    """Serves the Open-Meteo forecast and records each request's parameters."""
+
+    def __init__(self) -> None:
+        self.params: list[dict] = []
+        forecast_path = FIXTURES / "openmeteo" / "forecast.json"
+        self._payload = json.loads(forecast_path.read_text())
+
+    def get(self, url, params=None, timeout=None):
+        if url == _FORECAST_URL:
+            self.params.append(params or {})
+            return _Response(self._payload)
+        raise AssertionError(f"unexpected GET {url}")
+
+
+def _hub_location() -> WeatherLocation:
+    # A well-known city centre (London), never the household's real location.
+    return WeatherLocation(
+        name="London, England, United Kingdom",
+        latitude=51.51,
+        longitude=-0.13,
+        timezone="Europe/London",
+    )
+
+
+def _tokyo_location() -> WeatherLocation:
+    # Another well-known city centre, in a different timezone from London.
+    return WeatherLocation(
+        name="Tokyo, Japan",
+        latitude=35.68,
+        longitude=139.76,
+        timezone="Asia/Tokyo",
+    )
+
+
+def test_hub_weather_location_overrides_the_local_location(tmp_path):
+    # The local config points at one place; the hub's weather_location points at
+    # London. The loop passes the hub location to forecast() explicitly, and the
+    # request must use the hub's coordinates and zone. The local zone is UTC so
+    # MORNING falls in the morning window and a fetch actually happens.
+    local = Config(
+        location=Location(latitude=40.71, longitude=-74.01, timezone="UTC")
+    )
+
+    client = _ForecastClient()
+    sources = LiveSources(local, client, cache_dir=tmp_path, clock=lambda: MORNING)
+    forecast = sources.forecast(MORNING, local, weather_location=_hub_location())
+
+    assert forecast is not None
+    assert len(client.params) == 1
+    assert client.params[0]["latitude"] == 51.51
+    assert client.params[0]["longitude"] == -0.13
+    assert client.params[0]["timezone"] == "Europe/London"
+
+
+def test_hub_timezone_applies_to_the_forecast_not_the_schedule(tmp_path):
+    # Ruling: the hub city's timezone moves only the forecast (its request and
+    # displayed times), never the schedule clock. A frame in Pacific time with a
+    # London weather city still evaluates quiet hours and the morning window on
+    # Pacific time, so choosing a far-away city cannot wake the panel at night.
+    local = Config(
+        location=Location(
+            latitude=32.72, longitude=-117.16, timezone="America/Los_Angeles"
+        )
+    )
+    settings = FrameSettings(
+        now_playing_kinds=("music",),
+        quiet_hours=None,
+        morning_weather=None,
+        weather_location=_hub_location(),
+    )
+    effective = rules.effective_config(local, settings)
+
+    # The schedule clock is untouched: quiet-hours and morning decisions match
+    # the local config at every hour of the day.
+    base = datetime(2026, 11, 6, 0, 0, tzinfo=UTC)
+    for hour in range(24):
+        now = base + timedelta(hours=hour)
+        assert rules.in_quiet_hours(now, effective) == rules.in_quiet_hours(now, local)
+        assert rules.in_morning_window(now, effective) == rules.in_morning_window(
+            now, local
+        )
+
+    # The forecast request, however, uses the hub city's zone. pinned_weather
+    # forces a fetch regardless of the Pacific morning window.
+    client = _ForecastClient()
+    sources = LiveSources(local, client, cache_dir=tmp_path, clock=lambda: MORNING)
+    forecast = sources.forecast(
+        MORNING, effective, weather_location=_hub_location(), pinned_weather=True
+    )
+
+    assert forecast is not None
+    assert client.params[0]["timezone"] == "Europe/London"
+    assert client.params[0]["latitude"] == 51.51
+
+
+def test_changing_the_weather_location_refetches_within_the_ttl(tmp_path):
+    # Review Important 2: when the hub changes the city, the next due forecast
+    # must show the new place, not a cached one from the old city, even inside
+    # the 30-minute TTL. The clock is fixed, so without cache invalidation the
+    # second call would serve the stale cache and make no request.
+    cfg = Config(location=Location(timezone="UTC"))  # coords come from the hub
+
+    client = _ForecastClient()
+    sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: MORNING)
+
+    first = sources.forecast(MORNING, cfg, weather_location=_hub_location())
+    second = sources.forecast(MORNING, cfg, weather_location=_tokyo_location())
+
+    assert first is not None and second is not None
+    assert len(client.params) == 2
+    assert client.params[0]["latitude"] == 51.51  # London
+    assert client.params[1]["latitude"] == 35.68  # Tokyo
+    assert client.params[1]["timezone"] == "Asia/Tokyo"
+
+
+def test_invalid_hub_location_falls_back_to_the_local_location(tmp_path):
+    # An invalid hub weather_location parses to None, so forecast() falls back to
+    # the local [location]. A fixed UTC zone keeps the morning window deterministic.
+    local = Config(
+        location=Location(latitude=40.71, longitude=-74.01, timezone="UTC")
+    )
+    doc = {
+        "settings": {
+            "now_playing_kinds": ["music"],
+            "weather_location": {
+                "latitude": 999.0,  # out of range: the whole location is dropped
+                "longitude": -0.13,
+                "timezone": "Europe/London",
+            },
+        },
+        "pin": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/frame-control.json":
+            return httpx.Response(200, json=doc)
+        raise AssertionError(f"unexpected request {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as hub_client:
+        control = sources_fetch_control(hub_client)
+    assert control.settings.weather_location is None
+
+    client = _ForecastClient()
+    sources = LiveSources(local, client, cache_dir=tmp_path, clock=lambda: MORNING)
+    forecast = sources.forecast(
+        MORNING, local, weather_location=control.settings.weather_location
+    )
+
+    assert forecast is not None
+    assert client.params[0]["latitude"] == 40.71
+    assert client.params[0]["longitude"] == -74.01
+    assert client.params[0]["timezone"] == "UTC"
+
+
+def test_no_location_warning_fires_once_then_resets(tmp_path, caplog):
+    # Weather is on (default priority keeps "morning") but neither the hub nor
+    # the local config supplies a location: warn once per state change.
+    cfg = Config()  # no coordinates
+    client = _HubClient({})
+    sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: MORNING)
+
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        for _ in range(5):
+            assert sources.forecast(MORNING, cfg) is None
+
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "no location is set" in r.message
+    ]
+    assert len(warnings) == 1
+
+    # A location appears (the hub sets a city): the forecast succeeds and the
+    # warning state resets, so a later outage warns afresh. pinned_weather forces
+    # the fetch regardless of the window.
+    sources._client = _ForecastClient()
+    got = sources.forecast(
+        MORNING, cfg, weather_location=_hub_location(), pinned_weather=True
+    )
+    assert got is not None
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        assert sources.forecast(MORNING, cfg) is None
+    assert any("no location is set" in r.message for r in caplog.records)
+
+
+def test_no_location_warning_silent_when_weather_is_off(tmp_path, caplog):
+    # When morning weather is disabled there is nothing to nag about, even with
+    # no location set.
+    cfg = Config()
+    off = replace(
+        cfg,
+        schedule=replace(
+            cfg.schedule,
+            priority=tuple(n for n in cfg.schedule.priority if n != "morning"),
+        ),
+    )
+    sources = LiveSources(
+        cfg, _HubClient({}), cache_dir=tmp_path, clock=lambda: MORNING
+    )
+
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        for _ in range(3):
+            assert sources.forecast(MORNING, off) is None
+
+    assert not [r for r in caplog.records if "no location is set" in r.message]
+
+
+def sources_fetch_control(client: httpx.Client) -> FrameControl:
+    from nightstand.sources import framecontrol
+
+    control = framecontrol.fetch_control(client, "house.local")
+    assert control is not None
+    return control
 
 
 # --- Polling policy (pure functions) ----------------------------------------

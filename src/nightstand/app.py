@@ -31,7 +31,7 @@ from PIL import Image
 
 from nightstand import rules
 from nightstand.art import ArtLibrary, load_piece_image
-from nightstand.config import Config
+from nightstand.config import Config, Location
 from nightstand.display import Display, InkyDisplay
 from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
@@ -45,7 +45,7 @@ from nightstand.sources import artcontrol, framecontrol, hubnowplaying, mlb
 from nightstand.sources import health as health_source
 from nightstand.sources import weather as weather_source
 from nightstand.sources.coverart import CoverArt
-from nightstand.sources.framecontrol import FrameControl
+from nightstand.sources.framecontrol import FrameControl, WeatherLocation
 from nightstand.sources.mlb import GameState, LogoCache
 from nightstand.sources.weather import Forecast
 
@@ -167,6 +167,7 @@ class Sources(Protocol):
         now: datetime | None = None,
         cfg: Config | None = None,
         *,
+        weather_location: WeatherLocation | None = None,
         pinned_weather: bool = False,
     ) -> Forecast | None: ...
     def art(self, now: datetime, pinned_piece: str | None = None) -> ArtView: ...
@@ -213,6 +214,13 @@ class LiveSources:
         # day and time it was polled; and the last parsed game state.
         self._forecast_cache: Forecast | None = None
         self._forecast_at: datetime | None = None
+        # The (latitude, longitude, timezone) the cached forecast was fetched
+        # for, so a change of weather city (or back to the local location) drops
+        # the stale cache instead of showing the old city until the TTL passes.
+        self._forecast_key: tuple[float, float, str | None] | None = None
+        # Whether the "weather on but no location" warning has already been
+        # logged for the current state, so it fires once per state change.
+        self._no_location_warned = False
         self._game_pk: int | None = None
         self._schedule_at: datetime | None = None
         self._schedule_day: date | None = None
@@ -278,17 +286,34 @@ class LiveSources:
         now: datetime | None = None,
         cfg: Config | None = None,
         *,
+        weather_location: WeatherLocation | None = None,
         pinned_weather: bool = False,
     ) -> Forecast | None:
-        location = self._cfg.location
-        if location.latitude is None or location.longitude is None:
-            # Weather is off until the local config supplies coordinates; this
-            # is a clean "nothing to show", not an outage.
+        cfg = cfg if cfg is not None else self._cfg
+        # The hub's weather city, when set, supplies the forecast location and
+        # timezone directly, never through cfg.location (whose timezone is the
+        # frame's own schedule clock). Without one this is the local [location].
+        location = self._forecast_location(cfg, weather_location)
+        if location is None:
+            # No location from the hub or the local config. If morning weather is
+            # on, warn once per state change; the weather simply stays skipped,
+            # a clean "nothing to show" rather than an outage.
+            self._warn_no_location(cfg)
             self._clear_outage("forecast")
             return None
+        # A location is available again: the next time it goes missing warns anew.
+        self._no_location_warned = False
+
+        key = (location.latitude, location.longitude, location.timezone)
+        if key != self._forecast_key:
+            # The city changed (a new hub city, or back to the local location):
+            # drop the stale cache so the next due fetch shows the new place
+            # rather than the old one until the TTL expires.
+            self._forecast_cache = None
+            self._forecast_at = None
+            self._forecast_key = key
 
         now = now if now is not None else self._clock()
-        cfg = cfg if cfg is not None else self._cfg
         if pinned_weather:
             # While the weather is pinned the forecast must stay current all day,
             # not only around the morning window, so refresh it every 30 minutes
@@ -301,13 +326,33 @@ class LiveSources:
             self._clear_outage("forecast")
             return self._forecast_cache
 
-        value = self._guard("forecast", self._fetch_forecast)
+        value = self._guard("forecast", lambda: self._fetch_forecast(location))
         if value is not None:
             # Advance the timer only on success, so a failed fetch retries next
             # cycle rather than waiting out the TTL.
             self._forecast_cache = value
             self._forecast_at = now
         return self._forecast_cache
+
+    def _forecast_location(
+        self, cfg: Config, weather_location: WeatherLocation | None
+    ) -> Location | None:
+        """The location to fetch the forecast for, or ``None`` when none is set.
+
+        The hub's weather city wins when present, carrying its own coordinates
+        and timezone. Otherwise the local ``[location]`` is used, which is
+        disabled (``None``) until it supplies coordinates.
+        """
+        if weather_location is not None:
+            return Location(
+                latitude=weather_location.latitude,
+                longitude=weather_location.longitude,
+                timezone=weather_location.timezone,
+            )
+        local = cfg.location
+        if local.latitude is None or local.longitude is None:
+            return None
+        return local
 
     def art(self, now: datetime, pinned_piece: str | None = None) -> ArtView:
         view = self._guard("art", lambda: self._compute_art(now, pinned_piece))
@@ -374,12 +419,39 @@ class LiveSources:
         doc = hubnowplaying.fetch_now_playing(self._client, self._hub_authority)
         return hubnowplaying.parse_now_playing(doc)
 
-    def _fetch_forecast(self) -> Forecast | None:
-        location = self._cfg.location
+    def _fetch_forecast(self, location: Location) -> Forecast | None:
         data = weather_source.fetch_forecast(
             self._client, location.latitude, location.longitude, location.timezone
         )
-        return weather_source.parse_forecast(data, self._clock())
+        # Parse against ``now`` in the location's timezone, so the forecast's
+        # naive local times read in the place being shown, not the machine's
+        # zone. A location with no timezone keeps the system zone.
+        return weather_source.parse_forecast(data, self._forecast_now(location))
+
+    def _forecast_now(self, location: Location) -> datetime:
+        now = self._clock()
+        if location.timezone is not None:
+            return now.astimezone(ZoneInfo(location.timezone))
+        return now
+
+    def _warn_no_location(self, cfg: Config) -> None:
+        """Warn once when morning weather is on but no location is set.
+
+        "Weather is on" means the effective config still carries the ``morning``
+        screen in its priority (the hub has not disabled morning weather, or
+        there is no hub control and the local default keeps it). When weather is
+        off there is nothing to nag about, so the warning state resets.
+        """
+        weather_on = "morning" in cfg.schedule.priority
+        if not weather_on:
+            self._no_location_warned = False
+            return
+        if not self._no_location_warned:
+            self._no_location_warned = True
+            logger.warning(
+                "weather is on but no location is set; "
+                "set a weather city in the room picker Settings"
+            )
 
     def _guard(self, name: str, call: Callable[[], object]):
         try:
@@ -572,8 +644,12 @@ def run_once(
     np_raw = sources.now_playing()
     np = rules.now_playing_for_frame(np_raw, kinds, pin)
     game_state = sources.game()
+    weather_location = settings.weather_location if settings is not None else None
     forecast = sources.forecast(
-        now, cfg, pinned_weather=pin is not None and pin.what == "weather"
+        now,
+        cfg,
+        weather_location=weather_location,
+        pinned_weather=pin is not None and pin.what == "weather",
     )
     pinned_piece = pin.piece if pin is not None and pin.what == "art" else None
     art_view = sources.art(now, pinned_piece)

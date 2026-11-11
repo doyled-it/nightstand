@@ -380,7 +380,24 @@ def _show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _configure_logging(stream: object | None = None) -> None:
+    """Make the nightstand service's INFO logs visible in the journal.
+
+    systemd captures the process's stderr into the journal, so a single stream
+    handler there is all the redraw and held-redraw INFO lines need to show up.
+    The ``nightstand`` package logs at INFO; third-party libraries (httpx and the
+    rest) stay at the root WARNING level so the journal stays quiet.
+    """
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    root.addHandler(handler)
+    logging.getLogger("nightstand").setLevel(logging.INFO)
+
+
 def _run(args: argparse.Namespace) -> int:
+    _configure_logging()
     config = load_config()
     display = _build_display(args)
     if display is None:

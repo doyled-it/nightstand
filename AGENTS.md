@@ -145,14 +145,23 @@ identifying in any request (no name, email, address, or home location).
   malformed file falls back to the local config and no pin. The settings are the
   now-playing kinds the frame shows (`music`, `podcast`, `audiobook`; default
   `["music"]`, so podcasts and audiobooks stay off the frame unless enabled), the
-  quiet-hours window, and the morning-weather window and its on/off flag; the
-  frame derives a now-playing category from the track's `kind` and `genre`
-  (`rules.category`) to apply the kinds filter. The pin holds one screen (the art
-  piece, the weather, or now playing) for a while or until unpinned, ignoring the
-  normal schedule; a new pin (a higher `seq`) redraws once even in quiet hours, a
-  live game still wins over a pin, and a pinned art piece that has been deleted
-  falls back to the schedule. The "Frame control file" contract is in the hub's
-  `docs/cross-repo-features.md`.
+  quiet-hours window, the morning-weather window and its on/off flag, and the
+  weather location (`weather_location`: `null`, or a `name`, `latitude`,
+  `longitude`, and IANA `timezone`; coordinates are city-level, rounded to two
+  decimals by the hub). A valid `weather_location` replaces the local
+  `[location]` for the forecast only (its request coordinates, its request
+  timezone, and the forecast's displayed times); a missing, null, or
+  out-of-range value keeps the local `[location]`. The weather city's timezone
+  never reaches the schedule clock: quiet hours, the morning window, and redraw
+  gating stay on the frame's own local timezone (the local config, else the
+  system zone), so a city in another zone cannot shift when the panel sleeps or
+  wakes. The frame derives a now-playing category from the track's `kind` and
+  `genre` (`rules.category`) to apply the kinds filter. The pin holds one screen
+  (the art piece, the weather, or now playing) for a while or until unpinned,
+  ignoring the normal schedule; a new pin (a higher `seq`) redraws once even in
+  quiet hours, a live game still wins over a pin, and a pinned art piece that has
+  been deleted falls back to the schedule. The "Frame control file" contract is
+  in the hub's `docs/cross-repo-features.md`.
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot
   logo at `/v1/team/{id}/spots/150`, so no SVG rasterizer (cairosvg) is needed.

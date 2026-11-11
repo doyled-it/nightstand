@@ -142,13 +142,19 @@ def active_pin(control: FrameControl | None, now: datetime) -> Pin | None:
 
 
 def effective_config(cfg: Config, settings: FrameSettings | None) -> Config:
-    """``cfg`` with the hub's quiet-hours and morning settings overlaid.
+    """``cfg`` with the hub's schedule settings overlaid.
 
     When the hub sets quiet hours or a morning window, they replace the local
     schedule values. Disabling morning weather drops ``morning`` from the
     priority, so the morning screen never shows. Returns ``cfg`` unchanged when
     there are no settings (a missing or bad control file), so the frame keeps its
     local config.
+
+    The hub's weather city is deliberately *not* overlaid here: it changes only
+    the forecast (the request and the forecast's displayed times), handled in
+    ``LiveSources.forecast``. The schedule clock (quiet hours, the morning window,
+    redraw gating) stays on the frame's own local timezone, so choosing a city in
+    another zone never shifts when the panel sleeps or wakes.
     """
     if settings is None:
         return cfg

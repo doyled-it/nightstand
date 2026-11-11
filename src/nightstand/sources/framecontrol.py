@@ -19,8 +19,10 @@ control. The shape is pinned in the hub's ``docs/cross-repo-features.md`` (the
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -50,6 +52,24 @@ class MorningWeather:
 
 
 @dataclass(frozen=True)
+class WeatherLocation:
+    """A weather city set from the hub, replacing the local ``[location]``.
+
+    The hub geocodes a typed city into these fields and publishes them so every
+    frame shows the same place. ``latitude`` and ``longitude`` are city-level
+    (rounded to two decimals by the hub) and ``timezone`` is an IANA name;
+    ``name`` is the display label and is informational. ``None`` for the whole
+    value (a missing, null, or invalid block) means the frame keeps its local
+    ``[location]``.
+    """
+
+    name: str | None
+    latitude: float
+    longitude: float
+    timezone: str
+
+
+@dataclass(frozen=True)
 class FrameSettings:
     """The frame settings from the hub's control file.
 
@@ -57,11 +77,14 @@ class FrameSettings:
     ``quiet_hours`` is ``(start, end)`` or ``None`` when the hub sets none, in
     which case the frame keeps its local config. ``morning_weather`` is the
     morning window and its on/off flag, or ``None`` to keep the local config.
+    ``weather_location`` is the hub's weather city, or ``None`` to keep the local
+    ``[location]``.
     """
 
     now_playing_kinds: tuple[str, ...]
     quiet_hours: tuple[str, str] | None
     morning_weather: MorningWeather | None
+    weather_location: WeatherLocation | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +136,7 @@ def _settings(raw: dict) -> FrameSettings:
         now_playing_kinds=_kinds(raw.get("now_playing_kinds")),
         quiet_hours=_window(raw.get("quiet_hours")),
         morning_weather=_morning(raw.get("morning_weather")),
+        weather_location=_weather_location(raw.get("weather_location")),
     )
 
 
@@ -153,6 +177,68 @@ def _morning(value: object) -> MorningWeather | None:
     if weekday is None or weekend is None:
         return None
     return MorningWeather(enabled=enabled, weekday=weekday, weekend=weekend)
+
+
+def _weather_location(value: object) -> WeatherLocation | None:
+    """The hub's weather city, or ``None`` when absent or unusable.
+
+    ``None``, a missing key, or a non-object means "no hub location, keep the
+    local ``[location]``". A present block must carry a latitude in -90..90, a
+    longitude in -180..180, and a valid IANA ``timezone``; any part out of range
+    or malformed drops the whole location rather than fetching a bad forecast.
+    """
+    if not isinstance(value, dict):
+        return None
+    latitude = _coord(value.get("latitude"), 90.0)
+    longitude = _coord(value.get("longitude"), 180.0)
+    if latitude is None or longitude is None:
+        return None
+    timezone = value.get("timezone")
+    if not _valid_zone(timezone):
+        return None
+    name = value.get("name")
+    return WeatherLocation(
+        name=name if isinstance(name, str) else None,
+        latitude=latitude,
+        longitude=longitude,
+        timezone=timezone,
+    )
+
+
+def _coord(value: object, limit: float) -> float | None:
+    """``value`` as a finite float within ``+/- limit``, or ``None``.
+
+    Excludes ``bool`` (a subclass of ``int``), rejects NaN and infinities, and
+    treats an out-of-float-range integer (``10**400``, say) as unusable rather
+    than letting the ``OverflowError`` escape and drop the whole control document.
+    """
+    if not _is_number(value):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if -limit <= number <= limit:
+        return number
+    return None
+
+
+def _is_number(value: object) -> bool:
+    """A real int or float, excluding ``bool`` (a subclass of ``int``)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _valid_zone(value: object) -> bool:
+    """Whether ``value`` names a timezone ``zoneinfo`` can load."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 def _pair(value: object) -> tuple[str, str] | None:
