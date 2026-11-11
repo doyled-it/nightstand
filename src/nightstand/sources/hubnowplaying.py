@@ -64,6 +64,7 @@ def parse_now_playing(doc: dict) -> NowPlaying | None:
         art_url=track.get("art_url") or None,
         rooms=rooms,
         kind=track.get("kind") or "music",
+        genre=tuple(g for g in track.get("genre") or () if isinstance(g, str)),
         status=track.get("status") or "playing",
         duration=_number(track.get("duration")),
         position=_number(track.get("position")),

@@ -32,6 +32,11 @@ from nightstand.text import clock_time, font, wrap
 
 COVER_SIZE = 320
 
+# A cover whose aspect is within this fraction of square keeps today's cover
+# crop; one further off square than this is shown whole inside the square on a
+# paper background, so a tall audiobook cover is never cut and loses no title.
+COVER_SQUARE_TOLERANCE = 0.05
+
 # The full-width strip and the right edge both keep this margin; the text column
 # beside the cover starts just past the cover, and the column without a cover
 # starts a little further in from the left edge.
@@ -82,8 +87,7 @@ def render(np: NowPlaying, cover: Image.Image | None, now: datetime) -> Image.Im
     draw = ImageDraw.Draw(canvas)
 
     if cover is not None:
-        square = cover_crop(cover.convert("RGB"), COVER_SIZE, COVER_SIZE)
-        canvas.paste(dither_to_panel(square), (0, 0))
+        canvas.paste(_fit_cover(cover, COVER_SIZE), (0, 0))
         text_x = TEXT_X_WITH_COVER
     else:
         text_x = TEXT_X_NO_COVER
@@ -105,6 +109,30 @@ def render(np: NowPlaying, cover: Image.Image | None, now: datetime) -> Image.Im
 
     # Snap the anti-aliased text, bar, and chip edges to the six panel colors.
     return to_six_colors(canvas)
+
+
+def _fit_cover(cover: Image.Image, size: int) -> Image.Image:
+    """The cover as a ``size`` x ``size`` square ready to paste.
+
+    A near-square cover (aspect within ``COVER_SQUARE_TOLERANCE`` of 1) keeps the
+    cover crop, filling the square. A cover further off square is scaled to fit
+    whole inside the square and centred on a paper (white) background, so nothing
+    is cropped: a tall audiobook cover keeps its title and a wide one its edges.
+    The cover itself is Floyd-Steinberg dithered; the margins stay pure paper.
+    """
+    source = cover.convert("RGB")
+    width, height = source.size
+    if abs(width / height - 1.0) <= COVER_SQUARE_TOLERANCE:
+        return dither_to_panel(cover_crop(source, size, size))
+    scale = min(size / width, size / height)
+    new_width = max(1, round(width * scale))
+    new_height = max(1, round(height * scale))
+    resized = source.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    square = Image.new("RGB", (size, size), PURE["white"])
+    square.paste(
+        dither_to_panel(resized), ((size - new_width) // 2, (size - new_height) // 2)
+    )
+    return square
 
 
 def fit_title(

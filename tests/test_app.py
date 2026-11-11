@@ -28,6 +28,12 @@ from nightstand.palette import PURE
 from nightstand.screens.common import HEIGHT, WIDTH
 from nightstand.sources import mlb
 from nightstand.sources import weather as weather_source
+from nightstand.sources.framecontrol import (
+    FrameControl,
+    FrameSettings,
+    MorningWeather,
+    Pin,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 # A Friday, at noon: outside the quiet window and the morning window.
@@ -45,6 +51,16 @@ def _loop_config(**schedule_overrides) -> Config:
     return Config(schedule=schedule, location=Location(timezone="UTC"))
 
 
+_UNSET = object()
+
+
+def _frame_control(*, kinds=("music",), quiet=None, morning=None, pin=None):
+    settings = FrameSettings(
+        now_playing_kinds=kinds, quiet_hours=quiet, morning_weather=morning
+    )
+    return FrameControl(settings=settings, pin=pin)
+
+
 class FakeSources:
     """A hand-set ``Sources`` for driving the loop without any I/O."""
 
@@ -57,6 +73,11 @@ class FakeSources:
         self.art_piece: ArtPiece | None = None
         self.art_forced = False
         self.health_obj = Health()
+        self.control: FrameControl | None = None
+        # Records the last pin hints the loop passed down, so a test can assert
+        # the pin reached the source calls.
+        self.forecast_pinned_weather = None
+        self.art_pinned_piece = _UNSET
 
     def now_playing(self):
         return self.np
@@ -70,10 +91,15 @@ class FakeSources:
     def logo(self, team_id):
         return self.logo_img
 
-    def forecast(self):
+    def frame_control(self):
+        return self.control
+
+    def forecast(self, now=None, cfg=None, *, pinned_weather=False):
+        self.forecast_pinned_weather = pinned_weather
         return self.forecast_obj
 
-    def art(self, now):
+    def art(self, now, pinned_piece=None):
+        self.art_pinned_piece = pinned_piece
         return ArtView(piece=self.art_piece, forced=self.art_forced)
 
     def commit_art(self, now):
@@ -228,6 +254,7 @@ def test_stop_to_nothing_playing_waits_before_art(tmp_path):
 def test_bucket_change_for_the_same_track_pushes_immediately():
     cfg = _loop_config()
     sources = FakeSources()
+    sources.control = _frame_control(kinds=("music", "podcast"))
     anchor = NOON
     sources.np = _long_form(0.0, anchor)
     display = RecordingDisplay()
@@ -249,6 +276,7 @@ def test_quiet_hours_hold_settled_change_then_first_push_carries_current_bucket(
     # minute outside.
     cfg = _loop_config(quiet_start="06:00", quiet_end="12:30")
     sources = FakeSources()
+    sources.control = _frame_control(kinds=("music", "podcast"))
     anchor = NOON
     sources.np = _long_form(0.0, anchor)
     display = RecordingDisplay()
@@ -514,7 +542,7 @@ class _RotatingArtSource(FakeSources):
         self._eligible = eligible
         self._interval = interval
 
-    def art(self, now):
+    def art(self, now, pinned_piece=None):
         piece = self._rotation.current(self._eligible, now, self._interval)
         return ArtView(piece=piece, forced=False)
 
@@ -1427,6 +1455,7 @@ def test_quiet_hold_bucket_advance_logs_once(caplog):
     cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
     lf = _long_form(position=0.0, position_at=NOON)
     sources = FakeSources()
+    sources.control = _frame_control(kinds=("music", "podcast"))
     sources.np = lf
     display = RecordingDisplay()
     # Already the shown identity, so the settle does not mask the quiet hold.
@@ -1441,3 +1470,302 @@ def test_quiet_hold_bucket_advance_logs_once(caplog):
     held = _held_records(caplog)
     assert len(held) == 1
     assert "quiet hours" in held[0].getMessage()
+
+
+# --- Frame control: the kinds filter, settings, and pins --------------------
+
+
+def _a_forecast():
+    data = json.loads((FIXTURES / "openmeteo" / "forecast.json").read_text())
+    return weather_source.parse_forecast(data, MORNING)
+
+
+def _art_piece(tmp_path, piece_id="x.png"):
+    path = tmp_path / piece_id
+    Image.new("RGB", (400, 300), PURE["green"]).save(path)
+    return ArtPiece(path=path, title="Title", id=piece_id)
+
+
+def test_kinds_filter_keeps_a_disabled_category_off_the_frame(tmp_path, caplog):
+    # A podcast (long-form, no genre) with music-only kinds does not take the
+    # frame: the art screen shows instead, as if nothing were playing.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Episode 1", "Show", kind="long_form")
+    sources.art_piece = _art_piece(tmp_path)
+    sources.control = _frame_control(kinds=("music",))
+    display = RecordingDisplay()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(AppState(), cfg, sources, display, NOON) is True
+
+    message = _pushed_records(caplog)[0].getMessage()
+    assert "art" in message
+    assert "now_playing" not in message
+
+
+def test_now_playing_pin_shows_a_disabled_kind(tmp_path, caplog):
+    # A now-playing pin shows any kind, overriding the kinds filter.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.np = NowPlaying("Episode 1", "Show", kind="long_form")
+    sources.control = _frame_control(
+        kinds=("music",), pin=Pin("now_playing", None, None, 1, None)
+    )
+    display = RecordingDisplay()
+    state = AppState(shown_identity=("Episode 1", "Show", None))
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is True
+
+    assert "now_playing" in _pushed_records(caplog)[0].getMessage()
+    # The pin targets now playing, so neither art nor weather is pinned.
+    assert sources.art_pinned_piece is None
+    assert sources.forecast_pinned_weather is False
+
+
+def test_morning_weather_disabled_via_hub_drops_the_weather_screen(tmp_path, caplog):
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.forecast_obj = _a_forecast()
+    sources.art_piece = _art_piece(tmp_path)
+    sources.control = _frame_control(
+        morning=MorningWeather(
+            enabled=False, weekday=("06:00", "08:30"), weekend=("07:00", "09:00")
+        )
+    )
+    display = RecordingDisplay()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        # MORNING is inside the default weekday window, but the hub disabled it.
+        assert run_once(AppState(), cfg, sources, display, MORNING) is True
+
+    message = _pushed_records(caplog)[0].getMessage()
+    assert "art" in message
+    assert "weather" not in message
+
+
+def test_quiet_hours_from_the_hub_suppress_a_push():
+    # The local config has no quiet hours; the hub's quiet window governs.
+    cfg = _loop_config()  # local quiet [00:00, 00:00) never matches
+    sources = FakeSources()
+    sources.np = NowPlaying("Song", "Artist")
+    sources.control = _frame_control(quiet=("00:00", "23:59"))
+    display = RecordingDisplay()
+    state = AppState(shown_identity=("Song", "Artist", None))
+
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert display.shown == []
+
+
+def test_art_pin_forwards_the_piece_to_the_source(tmp_path):
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.art_piece = _art_piece(tmp_path)
+    sources.control = _frame_control(pin=Pin("art", "x.png", None, 1, None))
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), NOON)
+
+    assert sources.art_pinned_piece == "x.png"
+
+
+def test_pin_set_during_quiet_hours_redraws_exactly_once(tmp_path):
+    # Review Focus 2: a pin set during quiet hours forces one redraw, then holds.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")
+    sources = FakeSources()
+    sources.art_piece = _art_piece(tmp_path)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # No pin yet: the art is held by quiet hours (and the startup grace is spent).
+    assert run_once(state, cfg, sources, display, NOON) is False
+    # A pin appears: it forces one redraw despite quiet hours.
+    sources.control = _frame_control(pin=Pin("art", "x.png", None, 1, None))
+    assert run_once(state, cfg, sources, display, NOON) is True
+    # The same pin on the next cycle does not redraw again.
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert len(display.shown) == 1
+
+
+def test_expiring_pin_returns_to_the_schedule_without_a_storm(tmp_path):
+    # Review Focus 2: an expiring pin redraws the normal screen once, not a storm.
+    cfg = _loop_config()  # quiet never matches
+    sources = FakeSources()
+    sources.forecast_obj = _a_forecast()
+    sources.art_piece = _art_piece(tmp_path)
+    until = NOON + timedelta(minutes=5)
+    sources.control = _frame_control(pin=Pin("weather", None, until, 1, None))
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Weather is pinned: it draws once and the forecast is pinned-fetched.
+    assert run_once(state, cfg, sources, display, NOON) is True
+    assert sources.forecast_pinned_weather is True
+    # Still pinned, same key: no redraw.
+    assert run_once(state, cfg, sources, display, NOON + timedelta(minutes=1)) is False
+
+    # The pin expires: the normal schedule (art) redraws exactly once.
+    expired = NOON + timedelta(minutes=6)
+    assert run_once(state, cfg, sources, display, expired) is True
+    assert sources.forecast_pinned_weather is False
+    for i in range(5):
+        when = expired + timedelta(seconds=10 * (i + 1))
+        assert run_once(state, cfg, sources, display, when) is False
+    assert len(display.shown) == 2
+
+
+def test_pin_still_forces_after_a_settle_held_cycle(tmp_path):
+    # A pin set on the same cycle a new track is still settling must not lose its
+    # forced redraw: the settle holds that cycle, and the pin forces once settled.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")  # quiet all day
+    sources = FakeSources()
+    sources.forecast_obj = _a_forecast()
+    sources.art_piece = _art_piece(tmp_path)
+    display = RecordingDisplay()
+    # The frame has been running: a music track is already shown.
+    state = AppState(shown_identity=("Old", "Band", None), pin_seen=True)
+    sources.np = NowPlaying("Old", "Band")
+
+    # A new track starts and the weather is pinned on the same cycle. The new
+    # identity is held by the settle, so this cycle draws nothing.
+    sources.np = NowPlaying("New", "Band")
+    sources.control = _frame_control(pin=Pin("weather", None, None, 1, None))
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert display.shown == []
+
+    # Once the track settles, the pin forces the weather redraw despite quiet
+    # hours: the held cycle did not swallow the pin's one forced redraw.
+    settled = NOON + timedelta(seconds=20)
+    assert run_once(state, cfg, sources, display, settled) is True
+    assert len(display.shown) == 1
+
+
+def test_live_game_wins_over_a_pin(tmp_path, caplog):
+    cfg = _loop_config()
+    feed = json.loads((FIXTURES / "mlb" / "feed_scoring_play.json").read_text())
+    sources = FakeSources()
+    sources.game_state = mlb.parse_game(feed)
+    sources.art_piece = _art_piece(tmp_path)
+    sources.logo_img = Image.new("RGB", (150, 150), PURE["blue"])
+    sources.control = _frame_control(pin=Pin("art", "x.png", None, 1, None))
+    display = RecordingDisplay()
+
+    with caplog.at_level(logging.INFO, logger="nightstand.app"):
+        assert run_once(AppState(), cfg, sources, display, NOON) is True
+
+    assert "game" in _pushed_records(caplog)[0].getMessage()
+
+
+# --- LiveSources: frame control wiring --------------------------------------
+
+
+def _landscape_art_dir(tmp_path, names):
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    for name in names:
+        Image.new("RGB", (300, 200), PURE["green"]).save(art_dir / name)
+    return art_dir
+
+
+def _no_hub(request: httpx.Request) -> httpx.Response:
+    # No art-control and no frame-control: the frame falls back to local config.
+    return httpx.Response(404)
+
+
+def test_live_sources_frame_control_parsed_from_the_hub(tmp_path):
+    doc = {
+        "settings": {
+            "now_playing_kinds": ["music", "podcast"],
+            "quiet_hours": {"start": "23:00", "end": "05:00"},
+            "morning_weather": None,
+        },
+        "pin": {
+            "what": "weather", "piece": None, "until": None, "seq": 2, "set_at": None
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/frame-control.json":
+            return httpx.Response(200, json=doc)
+        raise AssertionError(f"unexpected request {request.url}")
+
+    cfg = Config(location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+        control = sources.frame_control()
+
+    assert control is not None
+    assert control.settings.now_playing_kinds == ("music", "podcast")
+    assert control.pin is not None and control.pin.what == "weather"
+
+
+def test_live_sources_frame_control_missing_file_is_none(tmp_path):
+    cfg = Config(location=Location(timezone="UTC"))
+    with httpx.Client(transport=httpx.MockTransport(_no_hub)) as client:
+        sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
+        assert sources.frame_control() is None
+
+
+def test_live_sources_art_holds_the_pinned_piece_without_advancing(tmp_path):
+    art_dir = _landscape_art_dir(tmp_path, ("a.png", "b.png", "c.png"))
+    cfg = Config(art=Art(dir=art_dir), location=Location(timezone="UTC"))
+
+    with httpx.Client(transport=httpx.MockTransport(_no_hub)) as client:
+        sources = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=tmp_path / "state",
+            clock=lambda: NOON,
+        )
+        # Establish the rotation on its first piece.
+        first = sources.art(NOON)
+        sources.commit_art(NOON)
+        first_id = first.piece.id
+
+        pinned_id = next(
+            name for name in ("a.png", "b.png", "c.png") if name != first_id
+        )
+        view = sources.art(NOON, pinned_id)
+        assert view.piece is not None and view.piece.id == pinned_id
+        assert view.forced is False
+
+        state = json.loads((tmp_path / "state" / "rotation.json").read_text())
+        assert state["current_id"] == first_id  # rotation did not advance
+
+        # Across a full interval the pinned piece still holds and does not advance.
+        later = NOON + timedelta(hours=2)
+        view_later = sources.art(later, pinned_id)
+        assert view_later.piece.id == pinned_id
+        state_later = json.loads((tmp_path / "state" / "rotation.json").read_text())
+        assert state_later["current_id"] == first_id
+
+
+def test_live_sources_art_pin_falls_back_when_the_piece_is_gone(tmp_path):
+    # Review Focus 4: the pinned piece was deleted from the library; the frame
+    # falls back to the normal schedule rather than crashing or showing nothing.
+    art_dir = _landscape_art_dir(tmp_path, ("only.png",))
+    cfg = Config(art=Art(dir=art_dir), location=Location(timezone="UTC"))
+
+    with httpx.Client(transport=httpx.MockTransport(_no_hub)) as client:
+        sources = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=tmp_path / "state",
+            clock=lambda: NOON,
+        )
+        view = sources.art(NOON, "deleted.png")
+
+    assert view.piece is not None
+    assert view.piece.id == "only.png"
+
+
+def test_live_sources_forecast_fetched_every_30_minutes_while_weather_pinned(tmp_path):
+    clock = _Clock(datetime(2026, 11, 6, 0, 0, tzinfo=UTC))
+    cfg = Config(location=Location(latitude=32.7, longitude=-117.2, timezone="UTC"))
+    client = _CountingClient(clock, schedule={"dates": []})
+    sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=clock)
+
+    for _ in range(24 * 60):  # one cycle a minute for 24 hours
+        sources.forecast(clock(), cfg, pinned_weather=True)
+        clock.advance(60)
+
+    # The forecast is pinned-fetched all day (not only the morning), every 30 min.
+    assert _min_gap_minutes(client.forecast_at) >= 30
+    assert any(when.hour >= 12 for when in client.forecast_at)  # afternoon too
+    assert len(client.forecast_at) >= 40  # about 48 over the day
