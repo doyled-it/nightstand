@@ -120,7 +120,10 @@ def _kinds(value: object) -> tuple[str, ...]:
     """The enabled kinds: valid entries of a list, else the default.
 
     An explicit (possibly empty) list is honoured after filtering to the three
-    valid kinds; a missing or non-list value falls back to the default.
+    valid kinds; a missing or non-list value falls back to the default. A list
+    naming only unknown kinds filters to empty by design, silencing the
+    now-playing screen, since an explicit list is taken at its word; only a
+    non-list value defaults to music.
     """
     if not isinstance(value, list):
         return DEFAULT_KINDS
@@ -200,13 +203,22 @@ def _valid_hhmm(value: object) -> bool:
 
 
 def _time(value: object) -> datetime | None:
-    """A ``datetime`` from an ISO-8601 string, or ``None`` when unparseable."""
+    """An aware ``datetime`` from an ISO-8601 string, or ``None`` when unusable.
+
+    A naive stamp (one with no UTC offset) is rejected: the contract requires an
+    offset, and comparing a naive ``until`` with the aware clock would raise and
+    stop the loop, so it is treated as no timestamp rather than reaching
+    ``active_pin``.
+    """
     if not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
 
 
 def _get(client: httpx.Client, host: str) -> object | None:

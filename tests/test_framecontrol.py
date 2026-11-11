@@ -205,6 +205,52 @@ def test_pin_with_bool_seq_is_dropped():
     assert control.pin is None
 
 
+def test_naive_until_is_rejected_so_the_pin_does_not_expire():
+    # A timestamp with no UTC offset is naive; comparing it with the aware clock
+    # would raise, so the stamp is rejected (treated as no expiry) rather than
+    # reaching the loop. The pin itself is kept, like an unparseable until.
+    doc = _full_doc(
+        pin={"what": "art", "piece": "a.jpg", "until": "2026-11-11T07:00:00", "seq": 4}
+    )
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.pin is not None
+    assert control.pin.until is None
+
+
+def test_naive_set_at_is_rejected():
+    doc = _full_doc(
+        pin={
+            "what": "weather",
+            "piece": None,
+            "until": None,
+            "seq": 2,
+            "set_at": "2026-11-10T21:00:00",  # naive, no offset
+        }
+    )
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.pin is not None
+    assert control.pin.set_at is None
+
+
+def test_all_invalid_kinds_collapse_to_empty():
+    # A list naming only unknown kinds filters to empty, honouring the explicit
+    # (if nonsensical) list, which silences the now-playing screen. A non-list
+    # value defaults to music instead; this is a deliberate, documented choice.
+    doc = _full_doc()
+    doc["settings"]["now_playing_kinds"] = ["noise", "static"]
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.now_playing_kinds == ()
+
+
 def test_pin_with_unparseable_until_treated_as_forever():
     doc = _full_doc(
         pin={"what": "art", "piece": "a.jpg", "until": "whenever", "seq": 3}

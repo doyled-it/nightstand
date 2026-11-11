@@ -1577,7 +1577,9 @@ def test_pin_set_during_quiet_hours_redraws_exactly_once(tmp_path):
     display = RecordingDisplay()
     state = AppState()
 
-    # No pin yet: the art is held by quiet hours (and the startup grace is spent).
+    # The hub is serving a control with no pin: the art is held by quiet hours
+    # and the startup grace is spent on this first control seen.
+    sources.control = _frame_control()
     assert run_once(state, cfg, sources, display, NOON) is False
     # A pin appears: it forces one redraw despite quiet hours.
     sources.control = _frame_control(pin=Pin("art", "x.png", None, 1, None))
@@ -1612,6 +1614,59 @@ def test_expiring_pin_returns_to_the_schedule_without_a_storm(tmp_path):
         when = expired + timedelta(seconds=10 * (i + 1))
         assert run_once(state, cfg, sources, display, when) is False
     assert len(display.shown) == 2
+
+
+def test_pin_evaluation_that_raises_keeps_the_loop_running(tmp_path, caplog):
+    # Review Focus 1, second line of defense: a bad pin (here a naive `until`
+    # built directly, bypassing the parser) makes the aware/naive comparison in
+    # active_pin raise. The loop must not die: the pin is ignored and the
+    # schedule still draws, with the failure logged once per outage.
+    cfg = _loop_config()
+    sources = FakeSources()
+    sources.art_piece = _art_piece(tmp_path)
+    naive_until = datetime(2026, 11, 6, 7, 0, 0)  # no tzinfo: naive
+    sources.control = FrameControl(
+        settings=FrameSettings(
+            now_playing_kinds=("music",), quiet_hours=None, morning_weather=None
+        ),
+        pin=Pin(what="art", piece="x.png", until=naive_until, seq=1, set_at=None),
+    )
+    display = RecordingDisplay()
+    state = AppState()
+
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        assert run_once(state, cfg, sources, display, NOON) is True
+        # A second failing cycle degrades the same way but does not re-log.
+        run_once(state, cfg, sources, display, NOON)
+
+    assert len(display.shown) >= 1
+    assert display.shown[-1].size == (WIDTH, HEIGHT)
+    warnings = [
+        r for r in caplog.records if "pin evaluation failed" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
+def test_startup_grace_baseline_is_the_first_control_seen(tmp_path):
+    # Minor 1: if the hub is unreachable on the first cycle (no control), the
+    # grace is not spent; the first control that then appears with a pin is the
+    # baseline and does not force a redraw, so a pin pre-existing at a reboot does
+    # not wake the panel at night.
+    cfg = _loop_config(quiet_start="00:00", quiet_end="23:59")  # quiet all day
+    sources = FakeSources()
+    sources.art_piece = _art_piece(tmp_path)
+    display = RecordingDisplay()
+    state = AppState()
+
+    # Cycle 1: hub down, no control at all.
+    sources.control = None
+    assert run_once(state, cfg, sources, display, NOON) is False
+
+    # Cycle 2: the first control seen carries a pin; it is a baseline, not a
+    # change, so it does not force a redraw through quiet hours.
+    sources.control = _frame_control(pin=Pin("art", "x.png", None, 1, None))
+    assert run_once(state, cfg, sources, display, NOON) is False
+    assert display.shown == []
 
 
 def test_pin_still_forces_after_a_settle_held_cycle(tmp_path):

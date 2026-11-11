@@ -443,6 +443,7 @@ class AppState:
     last_held: tuple | None = None
     pin_seq: int | None = None
     pin_seen: bool = False
+    pin_eval_failing: bool = False
 
 
 def _settled(
@@ -517,6 +518,28 @@ def _log_held(
     logger.info("redraw held: %s (%s)", reason, screen)
 
 
+def _safe_active_pin(state: AppState, control: FrameControl | None, now: datetime):
+    """The active pin, degrading to no pin if evaluating it raises.
+
+    The parser rejects a naive ``until`` already, but this is a second line of
+    defense for Review Focus 1: a frame-control problem must never stop the loop.
+    Any exception here (a naive stamp that slipped through, say, which would raise
+    on the aware/naive comparison) degrades to no pin, logged once per outage like
+    the other sources.
+    """
+    try:
+        pin = rules.active_pin(control, now)
+    except Exception as error:
+        if not state.pin_eval_failing:
+            state.pin_eval_failing = True
+            logger.warning("pin evaluation failed, ignoring pin: %s", error)
+        return None
+    if state.pin_eval_failing:
+        state.pin_eval_failing = False
+        logger.info("pin evaluation recovered")
+    return pin
+
+
 def run_once(
     state: AppState,
     cfg: Config,
@@ -528,11 +551,12 @@ def run_once(
     """Evaluate the rules once; push and return ``True`` only if it redrew."""
     control = sources.frame_control()
     settings = control.settings if control is not None else None
-    pin = rules.active_pin(control, now)
-    if not state.pin_seen:
-        # Startup grace: the first control the loop sees is a baseline, not a
-        # change, so a reboot into an existing pin does not wake the panel at
-        # night. A later pin with a higher seq forces one redraw (below).
+    pin = _safe_active_pin(state, control, now)
+    if control is not None and not state.pin_seen:
+        # Startup grace: the first control the loop actually sees is a baseline,
+        # not a change, so a reboot into an existing pin does not wake the panel
+        # at night. A cycle with no control (the hub briefly unreachable) does not
+        # spend the grace. A later pin with a higher seq forces one redraw (below).
         state.pin_seen = True
         if pin is not None:
             state.pin_seq = pin.seq
