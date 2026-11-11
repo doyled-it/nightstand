@@ -142,14 +142,19 @@ def active_pin(control: FrameControl | None, now: datetime) -> Pin | None:
 
 
 def effective_config(cfg: Config, settings: FrameSettings | None) -> Config:
-    """``cfg`` with the hub's schedule and weather-location settings overlaid.
+    """``cfg`` with the hub's schedule settings overlaid.
 
     When the hub sets quiet hours or a morning window, they replace the local
     schedule values. Disabling morning weather drops ``morning`` from the
-    priority, so the morning screen never shows. When the hub sets a weather
-    city it replaces the local ``[location]`` (coordinates and timezone) for the
-    forecast. Returns ``cfg`` unchanged when there are no settings (a missing or
-    bad control file), so the frame keeps its local config.
+    priority, so the morning screen never shows. Returns ``cfg`` unchanged when
+    there are no settings (a missing or bad control file), so the frame keeps its
+    local config.
+
+    The hub's weather city is deliberately *not* overlaid here: it changes only
+    the forecast (the request and the forecast's displayed times), handled in
+    ``LiveSources.forecast``. The schedule clock (quiet hours, the morning window,
+    redraw gating) stays on the frame's own local timezone, so choosing a city in
+    another zone never shifts when the panel sleeps or wakes.
     """
     if settings is None:
         return cfg
@@ -165,21 +170,9 @@ def effective_config(cfg: Config, settings: FrameSettings | None) -> Config:
             changes["priority"] = tuple(
                 name for name in schedule.priority if name != "morning"
             )
-    result = cfg
-    if changes:
-        result = replace(result, schedule=replace(schedule, **changes))
-    location = settings.weather_location
-    if location is not None:
-        result = replace(
-            result,
-            location=replace(
-                result.location,
-                latitude=location.latitude,
-                longitude=location.longitude,
-                timezone=location.timezone,
-            ),
-        )
-    return result
+    if not changes:
+        return cfg
+    return replace(cfg, schedule=replace(schedule, **changes))
 
 
 def decide(

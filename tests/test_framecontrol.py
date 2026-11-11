@@ -210,6 +210,7 @@ def test_bad_weather_location_falls_back_to_none():
         {"longitude": 0.0, "timezone": "UTC"},  # no latitude
         {"latitude": "32.72", "longitude": -117.16, "timezone": "UTC"},  # lat a string
         {"latitude": True, "longitude": 0.0, "timezone": "UTC"},  # lat a bool
+        {"latitude": 10**400, "longitude": 0.0, "timezone": "UTC"},  # overflows float
         "San Diego",  # not an object
     ):
         doc = _full_doc()
@@ -218,6 +219,25 @@ def test_bad_weather_location_falls_back_to_none():
             control = fetch_control(client, HOST)
         assert control is not None
         assert control.settings.weather_location is None, bad
+
+
+def test_oversized_coordinate_drops_only_the_location_not_the_document():
+    # A huge JSON integer overflows float(); it must drop only weather_location,
+    # leaving the rest of the control document (kinds, quiet hours, pin) intact
+    # rather than raising and losing the whole document for the cycle.
+    doc = _full_doc()
+    doc["settings"]["weather_location"] = {
+        "latitude": 10**400,
+        "longitude": 0.0,
+        "timezone": "UTC",
+    }
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.weather_location is None
+    assert control.settings.now_playing_kinds == ("music",)
+    assert control.settings.quiet_hours == ("22:00", "06:00")
 
 
 def test_integer_coordinates_are_accepted():

@@ -184,7 +184,9 @@ class _FakeSources:
     def logo(self, team_id):
         return None
 
-    def forecast(self, now=None, cfg=None, *, pinned_weather=False):
+    def forecast(
+        self, now=None, cfg=None, *, weather_location=None, pinned_weather=False
+    ):
         return None
 
     def art(self, now, pinned_piece=None):
@@ -210,7 +212,13 @@ def test_run_once_file_display_writes_png(tmp_path, monkeypatch):
     )
     out = tmp_path / "frame.png"
 
-    code = main(["run", "--once", "--display", "file", "--out", str(out)])
+    # `run` configures logging on the root logger; restore it so this test does
+    # not leave a stderr handler and a WARNING root level on the suite.
+    restore = _restore_logging()
+    try:
+        code = main(["run", "--once", "--display", "file", "--out", str(out)])
+    finally:
+        restore()
 
     assert code == 0
     rendered = Image.open(out).convert("RGB")

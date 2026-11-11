@@ -19,6 +19,7 @@ control. The shape is pinned in the hub's ``docs/cross-repo-features.md`` (the
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -188,30 +189,40 @@ def _weather_location(value: object) -> WeatherLocation | None:
     """
     if not isinstance(value, dict):
         return None
-    latitude = value.get("latitude")
-    longitude = value.get("longitude")
-    timezone = value.get("timezone")
-    if not _valid_lat(latitude) or not _valid_lon(longitude):
+    latitude = _coord(value.get("latitude"), 90.0)
+    longitude = _coord(value.get("longitude"), 180.0)
+    if latitude is None or longitude is None:
         return None
+    timezone = value.get("timezone")
     if not _valid_zone(timezone):
         return None
     name = value.get("name")
     return WeatherLocation(
         name=name if isinstance(name, str) else None,
-        latitude=float(latitude),
-        longitude=float(longitude),
+        latitude=latitude,
+        longitude=longitude,
         timezone=timezone,
     )
 
 
-def _valid_lat(value: object) -> bool:
-    """Whether ``value`` is a number in the latitude range -90..90."""
-    return _is_number(value) and -90.0 <= float(value) <= 90.0
+def _coord(value: object, limit: float) -> float | None:
+    """``value`` as a finite float within ``+/- limit``, or ``None``.
 
-
-def _valid_lon(value: object) -> bool:
-    """Whether ``value`` is a number in the longitude range -180..180."""
-    return _is_number(value) and -180.0 <= float(value) <= 180.0
+    Excludes ``bool`` (a subclass of ``int``), rejects NaN and infinities, and
+    treats an out-of-float-range integer (``10**400``, say) as unusable rather
+    than letting the ``OverflowError`` escape and drop the whole control document.
+    """
+    if not _is_number(value):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    if -limit <= number <= limit:
+        return number
+    return None
 
 
 def _is_number(value: object) -> bool:

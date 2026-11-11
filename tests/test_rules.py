@@ -495,7 +495,10 @@ def test_disabling_morning_weather_drops_the_morning_screen():
     assert decision.screen != "weather"
 
 
-def test_effective_config_overlays_the_weather_location():
+def test_effective_config_leaves_the_schedule_clock_local_for_a_weather_city():
+    # The hub's weather city must not reach the schedule clock: effective_config
+    # leaves location (and so quiet hours / the morning window) exactly as the
+    # local config has it. The forecast-only override lives in LiveSources.forecast.
     cfg = make_config()
     settings = FrameSettings(
         now_playing_kinds=("music",),
@@ -509,11 +512,10 @@ def test_effective_config_overlays_the_weather_location():
         ),
     )
     eff = rules.effective_config(cfg, settings)
-    assert eff.location.latitude == 51.51
-    assert eff.location.longitude == -0.13
-    assert eff.location.timezone == "Europe/London"
-    # The schedule is untouched when only the location is set.
+    assert eff.location == cfg.location
     assert eff.schedule == cfg.schedule
+    # With no schedule changes either, the config is returned unchanged.
+    assert eff is cfg
 
 
 # --- pinned decisions --------------------------------------------------------
