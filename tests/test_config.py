@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from nightstand.config import load_config
 
 
@@ -69,6 +71,47 @@ def test_env_var_is_read(tmp_path, monkeypatch):
     p.write_text('[hub]\nhost = "other.local"\n')
     monkeypatch.setenv("NIGHTSTAND_CONFIG", str(p))
     assert load_config().hub.host == "other.local"
+
+
+def test_frame_id_defaults_to_the_hostname(monkeypatch):
+    # With no [frame] id in config, the frame's inventory id is its hostname: the
+    # office host becomes "office", so it reads its own slice of the hub's
+    # per-frame art commands and frame control.
+    monkeypatch.setattr("nightstand.config.socket.gethostname", lambda: "office")
+    assert load_config().frame.id == "office"
+
+
+def test_frame_id_from_hostname_is_normalized(monkeypatch):
+    # A hostname with a domain or mixed case normalizes to a bare, lowercase
+    # inventory key: "Nightstand.local" -> "nightstand".
+    monkeypatch.setattr(
+        "nightstand.config.socket.gethostname", lambda: "Nightstand.local"
+    )
+    assert load_config().frame.id == "nightstand"
+
+
+def test_explicit_frame_id_overrides_the_hostname(tmp_path, monkeypatch):
+    monkeypatch.setattr("nightstand.config.socket.gethostname", lambda: "nightstand")
+    p = tmp_path / "local.toml"
+    p.write_text('[frame]\nid = "office"\n')
+    assert load_config(p).frame.id == "office"
+
+
+def test_invalid_explicit_frame_id_is_rejected(tmp_path):
+    # An id an operator typed must be a valid inventory key; a bad one fails loudly
+    # rather than silently never matching the hub's per-frame documents.
+    p = tmp_path / "local.toml"
+    p.write_text('[frame]\nid = "Bad_Id"\n')
+    with pytest.raises(ValueError):
+        load_config(p)
+
+
+def test_pathological_hostname_falls_back_without_raising(monkeypatch):
+    # A hostname that cannot be sanitized to a valid key must not crash the frame
+    # at startup (Review Focus 4): it falls back to a valid default, and the
+    # operator sets [frame] id explicitly.
+    monkeypatch.setattr("nightstand.config.socket.gethostname", lambda: "___")
+    assert load_config().frame.id == "nightstand"
 
 
 def test_example_config_disables_optional_location_fields():

@@ -16,6 +16,7 @@ from nightstand.config import Art, Config, Game, Schedule
 from nightstand.models import ArtPiece, NowPlaying
 from nightstand.rules import Context
 from nightstand.sources.framecontrol import (
+    QUIET_HOURS_OFF,
     FrameControl,
     FrameSettings,
     MorningWeather,
@@ -461,6 +462,23 @@ def test_effective_config_overlays_quiet_hours():
     eff = rules.effective_config(cfg, settings)
     assert eff.schedule.quiet_start == "23:00"
     assert eff.schedule.quiet_end == "05:00"
+
+
+def test_quiet_hours_off_window_is_never_quiet():
+    # A frame whose quiet hours are off (framecontrol.QUIET_HOURS_OFF, a
+    # zero-length window) overlays to a config that is never in quiet hours, even
+    # at an hour the local config would call quiet.
+    cfg = make_config(
+        schedule=replace(Schedule(), quiet_start="22:00", quiet_end="06:00")
+    )
+    settings = FrameSettings(
+        now_playing_kinds=("music",),
+        quiet_hours=QUIET_HOURS_OFF,
+        morning_weather=None,
+    )
+    eff = rules.effective_config(cfg, settings)
+    assert rules.in_quiet_hours(la(2026, 11, 9, 23, 0), eff) is False
+    assert rules.in_quiet_hours(la(2026, 11, 9, 3, 0), eff) is False
 
 
 def test_effective_config_overlays_the_morning_window():

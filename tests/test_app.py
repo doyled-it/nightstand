@@ -22,7 +22,7 @@ from nightstand.app import (
     run_once,
     schedule_due,
 )
-from nightstand.config import Art, Config, Location, Schedule
+from nightstand.config import Art, Config, Frame, Location, Schedule
 from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
 from nightstand.palette import PURE
@@ -1279,7 +1279,7 @@ def test_no_location_warning_silent_when_weather_is_off(tmp_path, caplog):
 def sources_fetch_control(client: httpx.Client) -> FrameControl:
     from nightstand.sources import framecontrol
 
-    control = framecontrol.fetch_control(client, "house.local")
+    control = framecontrol.fetch_control(client, "house.local", "nightstand")
     assert control is not None
     return control
 
@@ -1968,7 +1968,9 @@ def test_live_sources_frame_control_parsed_from_the_hub(tmp_path):
             return httpx.Response(200, json=doc)
         raise AssertionError(f"unexpected request {request.url}")
 
-    cfg = Config(location=Location(timezone="UTC"))
+    # The old single-frame shape (top-level pin, no frames map): its pin is the
+    # nightstand's, so a frame with that id still follows it during rollout.
+    cfg = Config(frame=Frame(id="nightstand"), location=Location(timezone="UTC"))
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         sources = LiveSources(cfg, client, cache_dir=tmp_path, clock=lambda: NOON)
         control = sources.frame_control()

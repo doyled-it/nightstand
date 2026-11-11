@@ -41,6 +41,20 @@ DEFAULT_KINDS = ("music",)
 #: What a pin may hold on the frame.
 PIN_TARGETS = ("art", "weather", "now_playing")
 
+#: A frame whose quiet hours are explicitly off (``frames[<id>].quiet_hours`` is
+#: ``{"enabled": false}``) is encoded as a zero-length window: ``start == end``,
+#: which ``rules.in_quiet_hours`` reads as "never quiet". This keeps the control
+#: layer producing a plain ``(start, end)`` that ``effective_config`` overlays
+#: with no special case, distinct from ``None`` (no override, keep the shared or
+#: local config).
+QUIET_HOURS_OFF = ("00:00", "00:00")
+
+#: The single frame in the pre-multi-frame contract. A document with no ``frames``
+#: map is the old shape, whose top-level ``pin`` is this frame's only when it is
+#: the nightstand (Review Focus 3); another frame reading an old document gets no
+#: pin.
+LEGACY_FRAME_ID = "nightstand"
+
 
 @dataclass(frozen=True)
 class MorningWeather:
@@ -113,11 +127,17 @@ class FrameControl:
     pin: Pin | None
 
 
-def fetch_control(client: httpx.Client, host: str) -> FrameControl | None:
+def fetch_control(
+    client: httpx.Client, host: str, frame_id: str
+) -> FrameControl | None:
     """Read ``http://{host}/frame-control.json`` into a ``FrameControl``, or ``None``.
 
     ``host`` is the hub's HTTP authority (host, or host:port off the default port
-    80). Returns ``None`` for anything the frame cannot use, which the caller
+    80). ``frame_id`` is this frame's inventory id, which selects its slice of the
+    ``frames`` map: its own quiet-hours override and pin. The shared ``settings``
+    apply to every frame. A document with no ``frames`` map is the old
+    single-frame shape, whose top-level ``pin`` is the nightstand's (Review Focus
+    3). Returns ``None`` for anything the frame cannot use, which the caller
     treats as "no hub control, use the local config and no pin".
     """
     doc = _get(client, host)
@@ -126,18 +146,72 @@ def fetch_control(client: httpx.Client, host: str) -> FrameControl | None:
     raw_settings = doc.get("settings")
     if not isinstance(raw_settings, dict):
         return None
-    return FrameControl(
-        settings=_settings(raw_settings), pin=_pin(doc.get("pin"))
-    )
+    entry = _frame_entry(doc.get("frames"), frame_id)
+    shared_quiet = _window(raw_settings.get("quiet_hours"))
+    quiet_hours = _frame_quiet_hours(entry, shared_quiet)
+    settings = _settings(raw_settings, quiet_hours)
+    return FrameControl(settings=settings, pin=_frame_pin(doc, entry, frame_id))
 
 
-def _settings(raw: dict) -> FrameSettings:
+def _settings(raw: dict, quiet_hours: tuple[str, str] | None) -> FrameSettings:
     return FrameSettings(
         now_playing_kinds=_kinds(raw.get("now_playing_kinds")),
-        quiet_hours=_window(raw.get("quiet_hours")),
+        quiet_hours=quiet_hours,
         morning_weather=_morning(raw.get("morning_weather")),
         weather_location=_weather_location(raw.get("weather_location")),
     )
+
+
+def _frame_entry(frames: object, frame_id: str) -> dict | None:
+    """This frame's entry in the ``frames`` map, or ``None``.
+
+    ``None`` when there is no ``frames`` map (the old single-frame shape), when
+    this frame is not listed in it (the hub does not know the frame yet), or when
+    the entry is not an object.
+    """
+    if not isinstance(frames, dict):
+        return None
+    entry = frames.get(frame_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _frame_quiet_hours(
+    entry: dict | None, shared: tuple[str, str] | None
+) -> tuple[str, str] | None:
+    """This frame's effective quiet hours.
+
+    ``entry`` is this frame's control entry, or ``None`` for the old shape or a
+    frame the hub does not list. Its ``quiet_hours`` override may be absent or
+    ``null`` (fall back to the shared ``settings.quiet_hours``), ``{"enabled":
+    false}`` (off, so the frame never sleeps), or a window ``{"start", "end"}``
+    (an override). Any other, malformed value falls back to the shared value, so
+    a garbage override never silently disables quiet hours.
+    """
+    if entry is None or "quiet_hours" not in entry:
+        return shared
+    raw = entry.get("quiet_hours")
+    if isinstance(raw, dict):
+        if raw.get("enabled") is False:
+            return QUIET_HOURS_OFF
+        window = _window(raw)
+        if window is not None:
+            return window
+    return shared
+
+
+def _frame_pin(doc: dict, entry: dict | None, frame_id: str) -> Pin | None:
+    """This frame's pin.
+
+    New shape: the pin in this frame's ``frames`` entry (no entry means no pin).
+    Old shape (no ``frames`` map): the top-level ``pin`` is the nightstand's, so
+    the nightstand keeps working when the hub updates last, and another frame
+    reading an old document gets no pin (Review Focus 3).
+    """
+    if isinstance(doc.get("frames"), dict):
+        return _pin(entry.get("pin")) if entry is not None else None
+    if frame_id == LEGACY_FRAME_ID:
+        return _pin(doc.get("pin"))
+    return None
 
 
 def _kinds(value: object) -> tuple[str, ...]:

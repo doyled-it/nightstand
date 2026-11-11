@@ -378,8 +378,9 @@ def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
 
         return SyncResult(added=2, updated=1, removed=0)
 
-    def fake_fetch_control(client, host):
+    def fake_fetch_control(client, host, frame_id):
         captured["host"] = host
+        captured["frame_id"] = frame_id
         from nightstand.sources.artcontrol import ArtControl
 
         return ArtControl(60, ("Collection",), None, None, None)
@@ -415,7 +416,8 @@ def test_art_sync_falls_back_to_all_folders_without_control(tmp_path, monkeypatc
 
     monkeypatch.setattr("nightstand.cli.sync_index", fake_sync_index)
     monkeypatch.setattr(
-        "nightstand.cli.artcontrol.fetch_control", lambda client, host: None
+        "nightstand.cli.artcontrol.fetch_control",
+        lambda client, host, frame_id: None,
     )
     config = tmp_path / "local.toml"
     config.write_text('[hub]\nhost = "hub.example"\nhttp_port = 8080\n')
