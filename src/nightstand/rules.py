@@ -18,15 +18,23 @@ anchored to the clock on the wall across daylight-saving transitions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from nightstand.config import Config
 from nightstand.models import ArtPiece, NowPlaying
+from nightstand.sources.framecontrol import FrameControl, FrameSettings, Pin
 from nightstand.sources.mlb import GameState, game_redraw_key
 from nightstand.sources.weather import Forecast
+
+# Genre words that name a category. The genre decides over the kind: an
+# audiobook genre on a short music track is an audiobook, and a podcast genre is
+# a podcast. A long-form track with no telling genre is a podcast (libro.fm and
+# some apps send no genre), and everything else is music.
+_AUDIOBOOK_WORDS = ("audiobook", "audio book", "spoken")
+_PODCAST_WORDS = ("podcast",)
 
 Screen = Literal["art", "now_playing", "game", "weather", "split", "placeholder"]
 
@@ -85,20 +93,106 @@ def in_morning_window(now: datetime, cfg: Config) -> bool:
     return _minutes(start_str) <= current < _minutes(end_str)
 
 
-def decide(now: datetime, cfg: Config, ctx: Context) -> Decision:
-    """The screen to show at ``now``, by walking ``schedule.priority``.
+def category(np: NowPlaying) -> str:
+    """The now-playing category: ``"music"``, ``"podcast"``, or ``"audiobook"``.
 
-    Unknown names in ``schedule.priority`` are ignored: only ``morning``,
+    The genre decides when it names a category: an audiobook or spoken-word
+    genre is an audiobook, a podcast genre is a podcast. Otherwise a long-form
+    track with no telling genre is a podcast (libro.fm and some apps send no
+    genre), and everything else is music.
+    """
+    text = " ".join(g.lower() for g in np.genre)
+    if any(word in text for word in _AUDIOBOOK_WORDS):
+        return "audiobook"
+    if any(word in text for word in _PODCAST_WORDS):
+        return "podcast"
+    if np.kind == "long_form":
+        return "podcast"
+    return "music"
+
+
+def now_playing_for_frame(
+    np: NowPlaying | None, kinds: tuple[str, ...], pin: Pin | None
+) -> NowPlaying | None:
+    """The track that may take the frame, or ``None`` when it may not.
+
+    A now-playing pin shows any kind. Otherwise the track takes the frame only
+    when its category is one of the enabled ``kinds``; a track of a disabled kind
+    is dropped, so the decision behaves as if nothing were playing.
+    """
+    if np is None:
+        return None
+    if pin is not None and pin.what == "now_playing":
+        return np
+    return np if category(np) in kinds else None
+
+
+def active_pin(control: FrameControl | None, now: datetime) -> Pin | None:
+    """The pin in force at ``now``, or ``None`` when there is none or it expired.
+
+    A pin with no ``until`` holds until unpinned; a pin whose ``until`` has
+    passed is expired and returns to the normal schedule.
+    """
+    if control is None or control.pin is None:
+        return None
+    pin = control.pin
+    if pin.until is not None and now >= pin.until:
+        return None
+    return pin
+
+
+def effective_config(cfg: Config, settings: FrameSettings | None) -> Config:
+    """``cfg`` with the hub's quiet-hours and morning settings overlaid.
+
+    When the hub sets quiet hours or a morning window, they replace the local
+    schedule values. Disabling morning weather drops ``morning`` from the
+    priority, so the morning screen never shows. Returns ``cfg`` unchanged when
+    there are no settings (a missing or bad control file), so the frame keeps its
+    local config.
+    """
+    if settings is None:
+        return cfg
+    schedule = cfg.schedule
+    changes: dict = {}
+    if settings.quiet_hours is not None:
+        changes["quiet_start"], changes["quiet_end"] = settings.quiet_hours
+    morning = settings.morning_weather
+    if morning is not None:
+        changes["morning_weekday"] = morning.weekday
+        changes["morning_weekend"] = morning.weekend
+        if not morning.enabled:
+            changes["priority"] = tuple(
+                name for name in schedule.priority if name != "morning"
+            )
+    if not changes:
+        return cfg
+    return replace(cfg, schedule=replace(schedule, **changes))
+
+
+def decide(
+    now: datetime, cfg: Config, ctx: Context, pin: Pin | None = None
+) -> Decision:
+    """The screen to show at ``now``.
+
+    With an active ``pin`` the pinned screen wins over the normal schedule, with
+    one exception: a live or recently-final game still wins over a pin (the game
+    is the one thing already allowed to update overnight). A pin whose screen has
+    nothing to show (weather pinned before the first forecast, say) falls through
+    to the normal schedule.
+
+    Without a pin the decision walks ``schedule.priority``: only ``morning``,
     ``music``, ``game``, and ``art`` are recognised, and the first whose
     condition holds wins. Nothing matching gives the placeholder.
 
-    One quiet-hours exception: during quiet hours every non-game screen is held
-    still by ``should_push``, so if the priority winner is not the game and a
-    game is on screen (live, or recently final), show the game instead. The game
-    is the one screen allowed to update overnight, so this keeps a live game
-    moving rather than freezing a non-game screen until morning. Outside quiet
-    hours the configured priority is unchanged.
+    One quiet-hours exception for the schedule: during quiet hours every non-game
+    screen is held still by ``should_push``, so if the priority winner is not the
+    game and a game is on screen, show the game instead, keeping a live game
+    moving rather than freezing a non-game screen until morning.
     """
+    if pin is not None:
+        pinned = _pinned_decision(now, cfg, ctx, pin)
+        if pinned is not None:
+            return pinned
     chosen = _by_priority(now, cfg, ctx)
     if (
         chosen.screen != "game"
@@ -108,6 +202,30 @@ def decide(now: datetime, cfg: Config, ctx: Context) -> Decision:
     ):
         return Decision("game", ("game",) + game_redraw_key(ctx.game))
     return chosen
+
+
+def _pinned_decision(
+    now: datetime, cfg: Config, ctx: Context, pin: Pin
+) -> Decision | None:
+    """The pinned screen's decision, or ``None`` when it has nothing to show."""
+    if ctx.game is not None and _game_on_screen(ctx.game, now, cfg):
+        return Decision("game", ("game",) + game_redraw_key(ctx.game))
+    if pin.what == "art":
+        if ctx.art is not None:
+            return Decision("art", _art_key(ctx.art))
+        return None
+    if pin.what == "weather":
+        if ctx.forecast is not None:
+            return Decision("weather", _weather_key(now, cfg))
+        return None
+    if pin.what == "now_playing":
+        if ctx.now_playing is not None:
+            return Decision(
+                "now_playing", _now_playing_key(ctx.now_playing, now, cfg)
+            )
+        if ctx.art is not None:
+            return Decision("art", _art_key(ctx.art))
+    return None
 
 
 def _by_priority(now: datetime, cfg: Config, ctx: Context) -> Decision:

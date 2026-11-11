@@ -41,10 +41,11 @@ from nightstand.screens import art as art_screen
 from nightstand.screens import game as game_screen
 from nightstand.screens import marker, placeholder, split, weather
 from nightstand.screens import now_playing as now_playing_screen
-from nightstand.sources import artcontrol, hubnowplaying, mlb
+from nightstand.sources import artcontrol, framecontrol, hubnowplaying, mlb
 from nightstand.sources import health as health_source
 from nightstand.sources import weather as weather_source
 from nightstand.sources.coverart import CoverArt
+from nightstand.sources.framecontrol import FrameControl
 from nightstand.sources.mlb import GameState, LogoCache
 from nightstand.sources.weather import Forecast
 
@@ -156,12 +157,19 @@ class ArtView:
 class Sources(Protocol):
     """What the loop needs from the outside world, each call degrading to None."""
 
+    def frame_control(self) -> FrameControl | None: ...
     def now_playing(self) -> NowPlaying | None: ...
     def cover(self, np: NowPlaying) -> Image.Image | None: ...
     def game(self) -> GameState | None: ...
     def logo(self, team_id: int) -> Image.Image | None: ...
-    def forecast(self) -> Forecast | None: ...
-    def art(self, now: datetime) -> ArtView: ...
+    def forecast(
+        self,
+        now: datetime | None = None,
+        cfg: Config | None = None,
+        *,
+        pinned_weather: bool = False,
+    ) -> Forecast | None: ...
+    def art(self, now: datetime, pinned_piece: str | None = None) -> ArtView: ...
     def commit_art(self, now: datetime) -> None: ...
     def health(self) -> Health: ...
 
@@ -210,6 +218,15 @@ class LiveSources:
         self._schedule_day: date | None = None
         self._game_state: GameState | None = None
 
+    def frame_control(self) -> FrameControl | None:
+        # fetch_control already swallows its own HTTP errors and returns None for
+        # a missing or bad file, so the guard here only catches the unexpected and
+        # keeps a surprise from stopping the loop.
+        return self._guard(
+            "frame_control",
+            lambda: framecontrol.fetch_control(self._client, self._hub_authority),
+        )
+
     def now_playing(self) -> NowPlaying | None:
         return self._guard("now_playing", self._fetch_now_playing)
 
@@ -256,7 +273,13 @@ class LiveSources:
         # clean "nothing to draw" and deliberately does not feed the marker.
         return self._guard("logo", lambda: self._logos.for_team(team_id))
 
-    def forecast(self) -> Forecast | None:
+    def forecast(
+        self,
+        now: datetime | None = None,
+        cfg: Config | None = None,
+        *,
+        pinned_weather: bool = False,
+    ) -> Forecast | None:
         location = self._cfg.location
         if location.latitude is None or location.longitude is None:
             # Weather is off until the local config supplies coordinates; this
@@ -264,8 +287,16 @@ class LiveSources:
             self._clear_outage("forecast")
             return None
 
-        now = self._clock()
-        if not forecast_due(now, self._cfg, self._forecast_at):
+        now = now if now is not None else self._clock()
+        cfg = cfg if cfg is not None else self._cfg
+        if pinned_weather:
+            # While the weather is pinned the forecast must stay current all day,
+            # not only around the morning window, so refresh it every 30 minutes
+            # regardless of the clock.
+            due = self._forecast_at is None or now - self._forecast_at >= _FORECAST_TTL
+        else:
+            due = forecast_due(now, cfg, self._forecast_at)
+        if not due:
             # Outside the span, or refreshed recently: serve the cache, no call.
             self._clear_outage("forecast")
             return self._forecast_cache
@@ -278,30 +309,43 @@ class LiveSources:
             self._forecast_at = now
         return self._forecast_cache
 
-    def art(self, now: datetime) -> ArtView:
-        view = self._guard("art", lambda: self._compute_art(now))
+    def art(self, now: datetime, pinned_piece: str | None = None) -> ArtView:
+        view = self._guard("art", lambda: self._compute_art(now, pinned_piece))
         return view if isinstance(view, ArtView) else ArtView(piece=None)
 
-    def _compute_art(self, now: datetime) -> ArtView:
+    def _compute_art(self, now: datetime, pinned_piece: str | None) -> ArtView:
         """Follow the hub: read the control file, apply a command, pick a piece.
 
         The hub's settings override the local rotation interval; a missing or bad
         control file falls back to the local config. Only enabled folders are on
         the device (the sync mirrors just those), so the eligible set is the local
         library filtered by the landscape rule.
+
+        While the art is pinned (``pinned_piece`` set) the frame holds that piece
+        and the rotation does not advance; a pinned piece that has been deleted
+        from the library falls back to the normal schedule (Review Focus 4).
         """
         control = artcontrol.fetch_control(self._client, self._hub_authority)
-        interval = (
-            control.rotate_minutes
-            if control is not None
-            else self._cfg.art.rotate_minutes
-        )
         # The hub's cutoff is the one source of truth for every frame; the local
         # config is only the fallback when the hub does not set one.
         min_aspect = self._cfg.art.min_aspect
         if control is not None and control.min_aspect is not None:
             min_aspect = control.min_aspect
         eligible = self._art.eligible(min_aspect)
+
+        if pinned_piece is not None:
+            pinned = {piece.id: piece for piece in eligible}.get(pinned_piece)
+            if pinned is not None:
+                # Hold the pinned piece: the rotation does not advance and a
+                # command is not applied while the art is pinned.
+                return ArtView(piece=pinned, forced=False)
+            # The pinned piece is gone; fall through to the normal schedule.
+
+        interval = (
+            control.rotate_minutes
+            if control is not None
+            else self._cfg.art.rotate_minutes
+        )
         forced = False
         if control is not None:
             forced = self._rotation.apply(control, eligible, now)
@@ -383,6 +427,12 @@ class AppState:
     ``last_held`` remembers the last held redraw already logged (its reason and
     the changed decision), so a hold is logged once when it starts rather than on
     every 10 s cycle; a push clears it so the next hold logs afresh.
+
+    ``pin_seq`` is the sequence number of the last pin the loop acted on, and
+    ``pin_seen`` records that the loop has seen at least one control: the first
+    control is adopted as a baseline without forcing a redraw (the startup grace),
+    so a frame that boots with a pin already set does not wake the panel at night.
+    A later pin with a higher ``seq`` forces one redraw even in quiet hours.
     """
 
     last_key: tuple | None = None
@@ -391,6 +441,9 @@ class AppState:
     shown_identity: TrackKey | None = None
     pending: tuple[TrackKey | None, datetime] | None = None
     last_held: tuple | None = None
+    pin_seq: int | None = None
+    pin_seen: bool = False
+    pin_eval_failing: bool = False
 
 
 def _settled(
@@ -465,6 +518,28 @@ def _log_held(
     logger.info("redraw held: %s (%s)", reason, screen)
 
 
+def _safe_active_pin(state: AppState, control: FrameControl | None, now: datetime):
+    """The active pin, degrading to no pin if evaluating it raises.
+
+    The parser rejects a naive ``until`` already, but this is a second line of
+    defense for Review Focus 1: a frame-control problem must never stop the loop.
+    Any exception here (a naive stamp that slipped through, say, which would raise
+    on the aware/naive comparison) degrades to no pin, logged once per outage like
+    the other sources.
+    """
+    try:
+        pin = rules.active_pin(control, now)
+    except Exception as error:
+        if not state.pin_eval_failing:
+            state.pin_eval_failing = True
+            logger.warning("pin evaluation failed, ignoring pin: %s", error)
+        return None
+    if state.pin_eval_failing:
+        state.pin_eval_failing = False
+        logger.info("pin evaluation recovered")
+    return pin
+
+
 def run_once(
     state: AppState,
     cfg: Config,
@@ -474,16 +549,40 @@ def run_once(
     history: ArtHistory | None = None,
 ) -> bool:
     """Evaluate the rules once; push and return ``True`` only if it redrew."""
-    np = sources.now_playing()
+    control = sources.frame_control()
+    settings = control.settings if control is not None else None
+    pin = _safe_active_pin(state, control, now)
+    if control is not None and not state.pin_seen:
+        # Startup grace: the first control the loop actually sees is a baseline,
+        # not a change, so a reboot into an existing pin does not wake the panel
+        # at night. A cycle with no control (the hub briefly unreachable) does not
+        # spend the grace. A later pin with a higher seq forces one redraw (below).
+        state.pin_seen = True
+        if pin is not None:
+            state.pin_seq = pin.seq
+    # The hub's quiet hours and morning window override the local config while a
+    # control is present; without one the frame keeps its local config.
+    cfg = rules.effective_config(cfg, settings)
+    kinds = (
+        settings.now_playing_kinds
+        if settings is not None
+        else framecontrol.DEFAULT_KINDS
+    )
+
+    np_raw = sources.now_playing()
+    np = rules.now_playing_for_frame(np_raw, kinds, pin)
     game_state = sources.game()
-    forecast = sources.forecast()
-    art_view = sources.art(now)
+    forecast = sources.forecast(
+        now, cfg, pinned_weather=pin is not None and pin.what == "weather"
+    )
+    pinned_piece = pin.piece if pin is not None and pin.what == "art" else None
+    art_view = sources.art(now, pinned_piece)
     art_piece = art_view.piece
 
     ctx = rules.Context(
         now_playing=np, game=game_state, forecast=forecast, art=art_piece
     )
-    decision = rules.decide(now, cfg, ctx)
+    decision = rules.decide(now, cfg, ctx, pin)
     if art_view.forced and decision.screen == "art":
         # A command (next, previous, show) just changed the piece: redraw now,
         # even in quiet hours.
@@ -494,6 +593,15 @@ def run_once(
         # A changed identity is waiting out the settle, not yet on the panel.
         _log_held(state, "settling", decision.screen, identity)
         return False
+
+    if pin is not None and (state.pin_seq is None or pin.seq > state.pin_seq):
+        # A new pin (a higher seq than the last one acted on) forces one redraw,
+        # even in quiet hours. This is past the settle gate, so a held cycle never
+        # consumes the pin's one forced redraw. An unchanged pin, an expired pin,
+        # and an unpin do not force: they return to the schedule at the next
+        # permitted redraw.
+        state.pin_seq = pin.seq
+        decision = replace(decision, forced=True)
 
     health = sources.health()
     marker_state = bool(health.problems)

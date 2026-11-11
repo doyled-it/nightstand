@@ -139,6 +139,19 @@ identifying in any request (no name, email, address, or home location).
   same-origin GETs; a missing or bad file falls back to the local config and
   changes nothing. This supersedes the old flat `/art/` autoindex sync. The
   "Art index file" and "Art control file" contracts are in the hub's
+  `docs/cross-repo-features.md`. The display loop also reads
+  `frame-control.json` each cycle (same `snaphouse-artadmin` service, keyless
+  same-origin GET) for the frame settings and the pin; a missing, stale, or
+  malformed file falls back to the local config and no pin. The settings are the
+  now-playing kinds the frame shows (`music`, `podcast`, `audiobook`; default
+  `["music"]`, so podcasts and audiobooks stay off the frame unless enabled), the
+  quiet-hours window, and the morning-weather window and its on/off flag; the
+  frame derives a now-playing category from the track's `kind` and `genre`
+  (`rules.category`) to apply the kinds filter. The pin holds one screen (the art
+  piece, the weather, or now playing) for a while or until unpinned, ignoring the
+  normal schedule; a new pin (a higher `seq`) redraws once even in quiet hours, a
+  live game still wins over a pin, and a pinned art piece that has been deleted
+  falls back to the schedule. The "Frame control file" contract is in the hub's
   `docs/cross-repo-features.md`.
 - `statsapi.mlb.com`: the MLB Stats API, for the schedule and the game feed.
 - `midfield.mlbstatic.com`: team logos. MLB serves a ready-made 150x150 PNG spot

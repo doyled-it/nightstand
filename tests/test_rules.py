@@ -15,6 +15,12 @@ from nightstand import rules
 from nightstand.config import Art, Config, Game, Schedule
 from nightstand.models import ArtPiece, NowPlaying
 from nightstand.rules import Context
+from nightstand.sources.framecontrol import (
+    FrameControl,
+    FrameSettings,
+    MorningWeather,
+    Pin,
+)
 from nightstand.sources.mlb import GameState, Team
 from nightstand.sources.weather import Forecast
 
@@ -337,3 +343,224 @@ def test_long_form_without_a_known_position_has_no_bucket():
     track = replace(a_long_form(), position=None, position_at=None)
 
     assert rules._now_playing_key(track, now, cfg)[-1] is None
+
+
+# --- category (Review Focus 3) -----------------------------------------------
+
+
+def _track(*, kind="music", genre=()) -> NowPlaying:
+    return NowPlaying(title="T", artist="A", rooms=("Office",), kind=kind, genre=genre)
+
+
+def test_long_form_with_no_genre_is_a_podcast():
+    assert rules.category(_track(kind="long_form", genre=())) == "podcast"
+
+
+def test_music_with_no_genre_is_music():
+    assert rules.category(_track(kind="music", genre=())) == "music"
+
+
+def test_audiobook_genre_on_a_short_music_track_is_an_audiobook():
+    # A short track (kind music) whose genre names an audiobook is an audiobook,
+    # genre deciding over kind.
+    assert rules.category(_track(kind="music", genre=("Audiobook",))) == "audiobook"
+
+
+def test_spoken_word_genre_is_an_audiobook():
+    track = _track(kind="long_form", genre=("Spoken Word",))
+    assert rules.category(track) == "audiobook"
+
+
+def test_podcast_genre_is_a_podcast():
+    assert rules.category(_track(kind="music", genre=("Podcast",))) == "podcast"
+
+
+def test_a_plain_music_genre_stays_music():
+    assert rules.category(_track(kind="music", genre=("Indie Rock",))) == "music"
+
+
+# --- the kinds filter --------------------------------------------------------
+
+
+def test_now_playing_passes_only_an_enabled_category():
+    music = _track(kind="music")
+    podcast = _track(kind="long_form", genre=("Podcast",))
+
+    assert rules.now_playing_for_frame(music, ("music",), None) is music
+    assert rules.now_playing_for_frame(podcast, ("music",), None) is None
+    assert rules.now_playing_for_frame(podcast, ("music", "podcast"), None) is podcast
+
+
+def test_now_playing_pin_passes_any_kind():
+    podcast = _track(kind="long_form", genre=("Podcast",))
+    pin = Pin(what="now_playing", piece=None, until=None, seq=1, set_at=None)
+
+    # Music-only kinds would normally drop the podcast, but a now_playing pin
+    # shows any kind.
+    assert rules.now_playing_for_frame(podcast, ("music",), pin) is podcast
+
+
+def test_filter_passes_none_through():
+    assert rules.now_playing_for_frame(None, ("music",), None) is None
+
+
+# --- active_pin --------------------------------------------------------------
+
+
+def _control(pin: Pin | None) -> FrameControl:
+    settings = FrameSettings(
+        now_playing_kinds=("music",), quiet_hours=None, morning_weather=None
+    )
+    return FrameControl(settings=settings, pin=pin)
+
+
+def test_active_pin_none_without_control_or_pin():
+    now = la(2026, 11, 9, 14, 0)
+    assert rules.active_pin(None, now) is None
+    assert rules.active_pin(_control(None), now) is None
+
+
+def test_active_pin_returns_a_live_pin():
+    now = la(2026, 11, 9, 14, 0)
+    pin = Pin(
+        what="art", piece="a.jpg", until=now + timedelta(hours=1), seq=1, set_at=None
+    )
+    assert rules.active_pin(_control(pin), now) is pin
+
+
+def test_active_pin_drops_an_expired_pin():
+    now = la(2026, 11, 9, 14, 0)
+    pin = Pin(
+        what="art", piece="a.jpg", until=now - timedelta(minutes=1), seq=1, set_at=None
+    )
+    assert rules.active_pin(_control(pin), now) is None
+
+
+def test_active_pin_keeps_a_forever_pin():
+    now = la(2026, 11, 9, 14, 0)
+    pin = Pin(what="weather", piece=None, until=None, seq=1, set_at=None)
+    assert rules.active_pin(_control(pin), now) is pin
+
+
+# --- effective_config --------------------------------------------------------
+
+
+def test_effective_config_is_unchanged_without_settings():
+    cfg = make_config()
+    assert rules.effective_config(cfg, None) is cfg
+
+
+def test_effective_config_overlays_quiet_hours():
+    cfg = make_config()
+    settings = FrameSettings(
+        now_playing_kinds=("music",),
+        quiet_hours=("23:00", "05:00"),
+        morning_weather=None,
+    )
+    eff = rules.effective_config(cfg, settings)
+    assert eff.schedule.quiet_start == "23:00"
+    assert eff.schedule.quiet_end == "05:00"
+
+
+def test_effective_config_overlays_the_morning_window():
+    cfg = make_config()
+    settings = FrameSettings(
+        now_playing_kinds=("music",),
+        quiet_hours=None,
+        morning_weather=MorningWeather(
+            enabled=True, weekday=("05:30", "09:00"), weekend=("06:00", "10:00")
+        ),
+    )
+    eff = rules.effective_config(cfg, settings)
+    assert eff.schedule.morning_weekday == ("05:30", "09:00")
+    assert eff.schedule.morning_weekend == ("06:00", "10:00")
+    assert "morning" in eff.schedule.priority
+
+
+def test_disabling_morning_weather_drops_the_morning_screen():
+    cfg = make_config()
+    settings = FrameSettings(
+        now_playing_kinds=("music",),
+        quiet_hours=None,
+        morning_weather=MorningWeather(
+            enabled=False, weekday=("06:00", "08:30"), weekend=("07:00", "09:00")
+        ),
+    )
+    eff = rules.effective_config(cfg, settings)
+    assert "morning" not in eff.schedule.priority
+    # The morning window never matches, so no weather shows in the morning.
+    now = la(2026, 11, 9, 6, 30)  # inside the default weekday morning window
+    decision = rules.decide(now, eff, Context(forecast=a_forecast()))
+    assert decision.screen != "weather"
+
+
+# --- pinned decisions --------------------------------------------------------
+
+
+def _pin(what, *, piece=None) -> Pin:
+    return Pin(what=what, piece=piece, until=None, seq=1, set_at=None)
+
+
+def test_art_pin_shows_the_pinned_piece():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    decision = rules.decide(
+        now, cfg, Context(art=an_art_piece()), _pin("art", piece="coastal.jpg")
+    )
+    assert decision.screen == "art"
+    assert decision.redraw_key == ("art", "coastal.jpg")
+
+
+def test_weather_pin_shows_the_weather_screen():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)  # not morning, not quiet
+    decision = rules.decide(now, cfg, Context(forecast=a_forecast()), _pin("weather"))
+    assert decision.screen == "weather"
+
+
+def test_now_playing_pin_shows_now_playing():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    decision = rules.decide(
+        now, cfg, Context(now_playing=a_track()), _pin("now_playing")
+    )
+    assert decision.screen == "now_playing"
+
+
+def test_now_playing_pin_falls_back_to_art_when_nothing_plays():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    decision = rules.decide(
+        now, cfg, Context(art=an_art_piece()), _pin("now_playing")
+    )
+    assert decision.screen == "art"
+
+
+def test_a_live_game_wins_over_a_pin():
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    ctx = Context(art=an_art_piece(), game=live_game())
+    decision = rules.decide(now, cfg, ctx, _pin("art", piece="coastal.jpg"))
+    assert decision.screen == "game"
+
+
+def test_pin_falls_through_when_its_screen_has_nothing():
+    # Weather pinned but no forecast yet: fall through to the normal schedule
+    # rather than showing a blank weather screen.
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    decision = rules.decide(now, cfg, Context(art=an_art_piece()), _pin("weather"))
+    assert decision.screen == "art"
+
+
+def test_pinned_art_key_is_stable_so_it_holds_across_intervals():
+    # The redraw key for pinned art is just the piece id, so repeated cycles do
+    # not redraw: pinned art holds the piece.
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    pin = _pin("art", piece="coastal.jpg")
+    d1 = rules.decide(now, cfg, Context(art=an_art_piece()), pin)
+    d2 = rules.decide(
+        now + timedelta(hours=2), cfg, Context(art=an_art_piece()), pin
+    )
+    assert d1.redraw_key == d2.redraw_key

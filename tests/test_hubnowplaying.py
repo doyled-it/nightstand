@@ -115,6 +115,43 @@ def test_malformed_field_values_degrade_to_none_without_raising():
     assert np.started_at is None
 
 
+# --- genre -------------------------------------------------------------------
+
+
+def test_parses_a_genre_list():
+    doc = {
+        "track": {"title": "Ep 1", "artist": "Show", "kind": "long_form",
+                  "genre": ["Podcast"]},
+        "rooms": ["Bedroom"],
+    }
+    np = hubnowplaying.parse_now_playing(doc)
+
+    assert np is not None
+    assert np.genre == ("Podcast",)
+
+
+def test_null_genre_is_empty():
+    doc = {
+        "track": {"title": "Song", "artist": "Band", "genre": None},
+        "rooms": ["Bedroom"],
+    }
+    np = hubnowplaying.parse_now_playing(doc)
+
+    assert np is not None
+    assert np.genre == ()
+
+
+def test_genre_drops_non_string_entries():
+    doc = {
+        "track": {"title": "Song", "artist": "Band", "genre": ["Rock", 7, None]},
+        "rooms": ["Bedroom"],
+    }
+    np = hubnowplaying.parse_now_playing(doc)
+
+    assert np is not None
+    assert np.genre == ("Rock",)
+
+
 # --- position_now ------------------------------------------------------------
 
 

@@ -122,6 +122,9 @@ class _FakeSources:
     does not apply here.
     """
 
+    def frame_control(self):
+        return None
+
     def now_playing(self):
         return None
 
@@ -134,10 +137,10 @@ class _FakeSources:
     def logo(self, team_id):
         return None
 
-    def forecast(self):
+    def forecast(self, now=None, cfg=None, *, pinned_weather=False):
         return None
 
-    def art(self, now):
+    def art(self, now, pinned_piece=None):
         from nightstand.app import ArtView
 
         return ArtView(piece=None)

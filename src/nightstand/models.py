@@ -43,11 +43,13 @@ class NowPlaying:
     track is playing in, in the order the hub reports them.
 
     ``kind`` is ``"music"`` or ``"long_form"`` (podcasts, audiobooks, long
-    mixes). ``status`` is ``"playing"`` or ``"paused"``. ``duration`` and
-    ``position`` are seconds. ``position`` is the playback position at the
-    moment ``position_at`` was recorded, so a consumer extrapolates forward from
-    that anchor while playing (see ``position_now``). ``started_at`` is when the
-    hub first saw this track playing.
+    mixes). ``genre`` is the hub's additive genre list, empty when unknown; the
+    frame reads it only to derive the now-playing category for the kinds filter
+    (see ``rules.category``). ``status`` is ``"playing"`` or ``"paused"``.
+    ``duration`` and ``position`` are seconds. ``position`` is the playback
+    position at the moment ``position_at`` was recorded, so a consumer
+    extrapolates forward from that anchor while playing (see ``position_now``).
+    ``started_at`` is when the hub first saw this track playing.
     """
 
     title: str
@@ -56,6 +58,7 @@ class NowPlaying:
     art_url: str | None = None
     rooms: tuple[str, ...] = ()
     kind: str = "music"
+    genre: tuple[str, ...] = ()
     status: str = "playing"
     duration: float | None = None
     position: float | None = None

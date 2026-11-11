@@ -75,7 +75,100 @@ def a_no_duration_track() -> NowPlaying:
     )
 
 
+# --- Whole-cover fit (Review Focus 5) ----------------------------------------
+
+
+def _solid(width: int, height: int) -> Image.Image:
+    """A solid-green cover of a given size; green is a pure panel ink, so after
+    dithering every cover pixel is non-white and any white pixel is a paper margin."""
+    return Image.new("RGB", (width, height), PURE["green"])
+
+
+C = now_playing.COVER_SIZE
+MID = C // 2
+
+
+def test_tall_cover_is_contained_with_side_margins():
+    fitted = now_playing._fit_cover(_solid(200, 400), C)
+    assert fitted.size == (C, C)
+    # Full height, centred, with paper margins left and right (nothing cropped).
+    assert fitted.getpixel((3, MID)) == PURE["white"]
+    assert fitted.getpixel((C - 3, MID)) == PURE["white"]
+    assert fitted.getpixel((MID, MID)) == PURE["green"]
+    assert fitted.getpixel((MID, 3)) == PURE["green"]
+    assert fitted.getpixel((MID, C - 3)) == PURE["green"]
+
+
+def test_wide_cover_is_contained_with_top_and_bottom_margins():
+    fitted = now_playing._fit_cover(_solid(400, 200), C)
+    assert fitted.size == (C, C)
+    assert fitted.getpixel((MID, 3)) == PURE["white"]
+    assert fitted.getpixel((MID, C - 3)) == PURE["white"]
+    assert fitted.getpixel((MID, MID)) == PURE["green"]
+    assert fitted.getpixel((3, MID)) == PURE["green"]
+    assert fitted.getpixel((C - 3, MID)) == PURE["green"]
+
+
+def test_tiny_cover_scales_up_to_fit():
+    fitted = now_playing._fit_cover(_solid(40, 80), C)
+    assert fitted.size == (C, C)
+    assert fitted.getpixel((MID, MID)) == PURE["green"]
+    assert fitted.getpixel((3, MID)) == PURE["white"]  # side margins, tall shape
+
+
+def test_huge_cover_scales_down_to_fit():
+    fitted = now_playing._fit_cover(_solid(4000, 3000), C)
+    assert fitted.size == (C, C)
+    # Wide shape: content centred vertically with top and bottom margins.
+    assert fitted.getpixel((MID, MID)) == PURE["green"]
+    assert fitted.getpixel((MID, 3)) == PURE["white"]
+
+
+def test_square_cover_fills_the_box_without_margins():
+    fitted = now_playing._fit_cover(_solid(300, 300), C)
+    assert fitted.size == (C, C)
+    # A near-square cover keeps the crop: it fills the box, right to the corners.
+    assert fitted.getpixel((3, 3)) == PURE["green"]
+    assert fitted.getpixel((C - 3, C - 3)) == PURE["green"]
+
+
+def test_cover_within_five_percent_of_square_keeps_the_crop():
+    # 300x312 is under the 5% tolerance, so it crops rather than leaving margins.
+    fitted = now_playing._fit_cover(_solid(300, 312), C)
+    assert fitted.getpixel((3, 3)) == PURE["green"]
+    assert fitted.getpixel((C - 3, C - 3)) == PURE["green"]
+
+
+def test_render_keeps_a_tall_cover_out_of_the_text_column():
+    tall = _solid(400, 760)
+    rendered = now_playing.render(a_music_track(), tall, NOW).convert("RGB")
+    # The cover box ends at COVER_SIZE; the text column starts at TEXT_X_WITH_COVER.
+    # No green (cover ink) may appear in or past the text column.
+    column = rendered.crop(
+        (now_playing.COVER_SIZE, 0, now_playing.WIDTH, now_playing.HEIGHT)
+    )
+    colors = {color for _, color in column.getcolors(maxcolors=4096)}
+    assert PURE["green"] not in colors
+
+
 # --- Goldens -----------------------------------------------------------------
+
+
+def a_tall_cover() -> Image.Image:
+    """A deterministic tall (audiobook-shaped) cover, built in code."""
+    img = Image.new("RGB", (500, 800))
+    draw = ImageDraw.Draw(img)
+    for y in range(800):
+        color = (30, 40 + y * 150 // 800, 120 + y * 100 // 800)
+        draw.line([(0, y), (500, y)], fill=color)
+    draw.rectangle([80, 120, 420, 520], fill=(230, 200, 60))
+    draw.ellipse([150, 560, 350, 740], fill=(200, 50, 60))
+    return img
+
+
+def test_tall_cover_matches_golden(assert_golden):
+    rendered = now_playing.render(a_podcast(), a_tall_cover(), NOW)
+    assert_golden(rendered, "now_playing_tall_cover.png", GLYPH_HEAVY_TOLERANCE)
 
 
 def test_music_with_cover_matches_golden(assert_golden):
