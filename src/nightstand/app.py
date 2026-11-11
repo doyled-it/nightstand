@@ -213,6 +213,9 @@ class LiveSources:
         # day and time it was polled; and the last parsed game state.
         self._forecast_cache: Forecast | None = None
         self._forecast_at: datetime | None = None
+        # Whether the "weather on but no location" warning has already been
+        # logged for the current state, so it fires once per state change.
+        self._no_location_warned = False
         self._game_pk: int | None = None
         self._schedule_at: datetime | None = None
         self._schedule_day: date | None = None
@@ -280,15 +283,22 @@ class LiveSources:
         *,
         pinned_weather: bool = False,
     ) -> Forecast | None:
-        location = self._cfg.location
+        cfg = cfg if cfg is not None else self._cfg
+        # The hub's weather city, when set, has already replaced the local
+        # [location] in the effective config the caller passes in; without one
+        # this is the local [location].
+        location = cfg.location
         if location.latitude is None or location.longitude is None:
-            # Weather is off until the local config supplies coordinates; this
-            # is a clean "nothing to show", not an outage.
+            # No location from the hub or the local config. If morning weather is
+            # on, warn once per state change; the weather simply stays skipped,
+            # a clean "nothing to show" rather than an outage.
+            self._warn_no_location(cfg)
             self._clear_outage("forecast")
             return None
+        # A location is available again: the next time it goes missing warns anew.
+        self._no_location_warned = False
 
         now = now if now is not None else self._clock()
-        cfg = cfg if cfg is not None else self._cfg
         if pinned_weather:
             # While the weather is pinned the forecast must stay current all day,
             # not only around the morning window, so refresh it every 30 minutes
@@ -301,7 +311,7 @@ class LiveSources:
             self._clear_outage("forecast")
             return self._forecast_cache
 
-        value = self._guard("forecast", self._fetch_forecast)
+        value = self._guard("forecast", lambda: self._fetch_forecast(location))
         if value is not None:
             # Advance the timer only on success, so a failed fetch retries next
             # cycle rather than waiting out the TTL.
@@ -374,12 +384,39 @@ class LiveSources:
         doc = hubnowplaying.fetch_now_playing(self._client, self._hub_authority)
         return hubnowplaying.parse_now_playing(doc)
 
-    def _fetch_forecast(self) -> Forecast | None:
-        location = self._cfg.location
+    def _fetch_forecast(self, location) -> Forecast | None:
         data = weather_source.fetch_forecast(
             self._client, location.latitude, location.longitude, location.timezone
         )
-        return weather_source.parse_forecast(data, self._clock())
+        # Parse against ``now`` in the location's timezone, so the forecast's
+        # naive local times read in the place being shown, not the machine's
+        # zone. A location with no timezone keeps the system zone.
+        return weather_source.parse_forecast(data, self._forecast_now(location))
+
+    def _forecast_now(self, location) -> datetime:
+        now = self._clock()
+        if location.timezone is not None:
+            return now.astimezone(ZoneInfo(location.timezone))
+        return now
+
+    def _warn_no_location(self, cfg: Config) -> None:
+        """Warn once when morning weather is on but no location is set.
+
+        "Weather is on" means the effective config still carries the ``morning``
+        screen in its priority (the hub has not disabled morning weather, or
+        there is no hub control and the local default keeps it). When weather is
+        off there is nothing to nag about, so the warning state resets.
+        """
+        weather_on = "morning" in cfg.schedule.priority
+        if not weather_on:
+            self._no_location_warned = False
+            return
+        if not self._no_location_warned:
+            self._no_location_warned = True
+            logger.warning(
+                "weather is on but no location is set; "
+                "set a weather city in the room picker Settings"
+            )
 
     def _guard(self, name: str, call: Callable[[], object]):
         try:

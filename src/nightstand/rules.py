@@ -142,13 +142,14 @@ def active_pin(control: FrameControl | None, now: datetime) -> Pin | None:
 
 
 def effective_config(cfg: Config, settings: FrameSettings | None) -> Config:
-    """``cfg`` with the hub's quiet-hours and morning settings overlaid.
+    """``cfg`` with the hub's schedule and weather-location settings overlaid.
 
     When the hub sets quiet hours or a morning window, they replace the local
     schedule values. Disabling morning weather drops ``morning`` from the
-    priority, so the morning screen never shows. Returns ``cfg`` unchanged when
-    there are no settings (a missing or bad control file), so the frame keeps its
-    local config.
+    priority, so the morning screen never shows. When the hub sets a weather
+    city it replaces the local ``[location]`` (coordinates and timezone) for the
+    forecast. Returns ``cfg`` unchanged when there are no settings (a missing or
+    bad control file), so the frame keeps its local config.
     """
     if settings is None:
         return cfg
@@ -164,9 +165,21 @@ def effective_config(cfg: Config, settings: FrameSettings | None) -> Config:
             changes["priority"] = tuple(
                 name for name in schedule.priority if name != "morning"
             )
-    if not changes:
-        return cfg
-    return replace(cfg, schedule=replace(schedule, **changes))
+    result = cfg
+    if changes:
+        result = replace(result, schedule=replace(schedule, **changes))
+    location = settings.weather_location
+    if location is not None:
+        result = replace(
+            result,
+            location=replace(
+                result.location,
+                latitude=location.latitude,
+                longitude=location.longitude,
+                timezone=location.timezone,
+            ),
+        )
+    return result
 
 
 def decide(

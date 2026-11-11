@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
+import logging
 from pathlib import Path
 
 from PIL import Image, ImageChops
 
-from nightstand.cli import main
+from nightstand.cli import _configure_logging, main
 from nightstand.models import Health
 from nightstand.palette import PURE
 from nightstand.screens import placeholder
@@ -14,6 +16,51 @@ MLB_FIXTURES = Path(__file__).parent / "fixtures" / "mlb"
 OPENMETEO_FIXTURES = Path(__file__).parent / "fixtures" / "openmeteo"
 _EMPTY_ART_MESSAGE = "Add art to the share"
 _NO_GAME_MESSAGE = "No game today"
+
+
+def _restore_logging():
+    """Snapshot and restore global logging state around a configure test."""
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_root_level = root.level
+    saved_ns_level = logging.getLogger("nightstand").level
+    saved_httpx_level = logging.getLogger("httpx").level
+
+    def restore():
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_root_level)
+        logging.getLogger("nightstand").setLevel(saved_ns_level)
+        logging.getLogger("httpx").setLevel(saved_httpx_level)
+
+    return restore
+
+
+def test_configure_logging_shows_nightstand_info_hides_library_noise():
+    restore = _restore_logging()
+    try:
+        stream = io.StringIO()
+        _configure_logging(stream)
+
+        # The nightstand package logs at INFO; a library like httpx stays at the
+        # root WARNING level.
+        assert logging.getLogger("nightstand").getEffectiveLevel() == logging.INFO
+        assert logging.getLogger("httpx").getEffectiveLevel() == logging.WARNING
+
+        logging.getLogger("nightstand.app").info("pushed art Photos/beach.jpg")
+        logging.getLogger("nightstand.app").info("redraw held: quiet hours (art)")
+        logging.getLogger("httpx").info("HTTP Request: GET /frame-control.json")
+        logging.getLogger("httpx").warning("a real problem")
+
+        output = stream.getvalue()
+    finally:
+        restore()
+
+    # Both nightstand INFO lines reach the handler.
+    assert "pushed art Photos/beach.jpg" in output
+    assert "redraw held: quiet hours (art)" in output
+    # The httpx INFO noise does not, but a genuine httpx warning still does.
+    assert "GET /frame-control.json" not in output
+    assert "a real problem" in output
 
 
 def _only_panel_colors(rendered: Image.Image) -> bool:

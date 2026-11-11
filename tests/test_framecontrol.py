@@ -7,6 +7,7 @@ import httpx
 from nightstand.sources.framecontrol import (
     MorningWeather,
     Pin,
+    WeatherLocation,
     fetch_control,
 )
 
@@ -136,6 +137,103 @@ def test_bad_morning_weather_falls_back_to_none():
             control = fetch_control(client, HOST)
         assert control is not None
         assert control.settings.morning_weather is None, bad
+
+
+# --- weather location ---------------------------------------------------------
+
+
+def test_missing_weather_location_is_none():
+    # No key means "keep the local [location]".
+    with _serve(_full_doc()) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.weather_location is None
+
+
+def test_null_weather_location_is_none():
+    doc = _full_doc()
+    doc["settings"]["weather_location"] = None
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.weather_location is None
+
+
+def test_parses_a_full_weather_location():
+    # A well-known city centre, never the household's real location.
+    doc = _full_doc()
+    doc["settings"]["weather_location"] = {
+        "name": "San Diego, California, United States",
+        "latitude": 32.72,
+        "longitude": -117.16,
+        "timezone": "America/Los_Angeles",
+    }
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.weather_location == WeatherLocation(
+        name="San Diego, California, United States",
+        latitude=32.72,
+        longitude=-117.16,
+        timezone="America/Los_Angeles",
+    )
+
+
+def test_weather_location_without_a_name_is_kept():
+    doc = _full_doc()
+    doc["settings"]["weather_location"] = {
+        "latitude": 51.51,
+        "longitude": -0.13,
+        "timezone": "Europe/London",
+    }
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.weather_location is not None
+    assert control.settings.weather_location.name is None
+    assert control.settings.weather_location.timezone == "Europe/London"
+
+
+def test_bad_weather_location_falls_back_to_none():
+    for bad in (
+        {"latitude": 91.0, "longitude": 0.0, "timezone": "UTC"},  # lat too high
+        {"latitude": -90.1, "longitude": 0.0, "timezone": "UTC"},  # lat too low
+        {"latitude": 0.0, "longitude": 181.0, "timezone": "UTC"},  # lon too high
+        {"latitude": 0.0, "longitude": -181.0, "timezone": "UTC"},  # lon too low
+        {"latitude": 0.0, "longitude": 0.0, "timezone": "Mars/Phobos"},  # bad zone
+        {"latitude": 0.0, "longitude": 0.0, "timezone": ""},  # empty zone
+        {"latitude": 0.0, "longitude": 0.0},  # no timezone
+        {"longitude": 0.0, "timezone": "UTC"},  # no latitude
+        {"latitude": "32.72", "longitude": -117.16, "timezone": "UTC"},  # lat a string
+        {"latitude": True, "longitude": 0.0, "timezone": "UTC"},  # lat a bool
+        "San Diego",  # not an object
+    ):
+        doc = _full_doc()
+        doc["settings"]["weather_location"] = bad
+        with _serve(doc) as client:
+            control = fetch_control(client, HOST)
+        assert control is not None
+        assert control.settings.weather_location is None, bad
+
+
+def test_integer_coordinates_are_accepted():
+    # JSON may carry whole-number coordinates as ints; they are valid.
+    doc = _full_doc()
+    doc["settings"]["weather_location"] = {
+        "latitude": 0,
+        "longitude": 0,
+        "timezone": "UTC",
+    }
+    with _serve(doc) as client:
+        control = fetch_control(client, HOST)
+
+    assert control is not None
+    assert control.settings.weather_location is not None
+    assert control.settings.weather_location.latitude == 0.0
 
 
 # --- pin ----------------------------------------------------------------------
