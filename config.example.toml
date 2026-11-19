@@ -52,7 +52,7 @@ progress_bucket_seconds = 600
 dir = "/var/lib/nightstand/art"
 rotate_minutes = 60
 # Only rotate pieces at least this many times wider than tall; narrower pieces
-# stay in the share but are skipped.
+# stay in the share but are skipped. Pieces in ente- folders are exempt.
 min_aspect = 1.3
 
 [game]
