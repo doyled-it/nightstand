@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 _EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 _MINUTES_PER_DAY = 60 * 24
+# Folders the hub mirrors from Ente Photos are named ``ente-<albumId>``. Their
+# pieces are kept whatever their shape, so tall photos are not filtered out.
+ENTE_FOLDER_PREFIX = "ente-"
 
 
 class ArtLibrary:
@@ -69,13 +72,16 @@ class ArtLibrary:
         """The pieces that may rotate: those at least ``min_aspect`` wide.
 
         A piece whose image cannot be read, or that is narrower than
-        ``min_aspect``, is left out. The aspect cache means an unchanged image is
-        decoded once rather than on every call.
+        ``min_aspect``, is left out. Pieces in an Ente folder are exempt from
+        the width rule but still need a readable image. The aspect cache means an
+        unchanged image is decoded once rather than on every call.
         """
         result = []
         for piece in self.pieces():
             aspect = self._aspect(piece)
-            if aspect is not None and aspect >= min_aspect:
+            if aspect is not None and (
+                aspect >= min_aspect or is_landscape_exempt(piece)
+            ):
                 result.append(piece)
         return result
 
@@ -102,7 +108,9 @@ class ArtLibrary:
         for offset in range(len(order)):
             piece = order[(start + offset) % len(order)]
             aspect = self._aspect(piece)
-            if aspect is not None and aspect >= min_aspect:
+            if aspect is not None and (
+                aspect >= min_aspect or is_landscape_exempt(piece)
+            ):
                 return piece
         return None
 
@@ -130,6 +138,15 @@ class ArtLibrary:
         aspect = width / height
         self._aspect_cache[piece.path] = (stat.st_mtime, stat.st_size, aspect)
         return aspect
+
+
+def is_landscape_exempt(piece: ArtPiece) -> bool:
+    """True for a piece in an Ente folder (``ente-<albumId>/<file>``).
+
+    A top-level file is never exempt, whatever its name.
+    """
+    folder, sep, _ = piece.id.partition("/")
+    return bool(sep) and folder.lower().startswith(ENTE_FOLDER_PREFIX)
 
 
 def art_slot(now: datetime, rotate_minutes: int) -> int:
