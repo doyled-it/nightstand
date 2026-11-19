@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from nightstand.art import ArtLibrary, art_slot, load_piece_image
+from nightstand.art import ArtLibrary, art_slot, is_landscape_exempt, load_piece_image
 from nightstand.models import ArtPiece
 
 NOW = datetime(2026, 11, 6, 12, 0, 0)
@@ -281,3 +281,67 @@ def test_pick_caches_aspect_and_does_not_redecode_each_cycle(tmp_path, monkeypat
 
     # Each file is decoded at most once despite 48 picks: the aspect is cached.
     assert len(decodes) <= 4
+
+
+def _write_sized(path: Path, size: tuple[int, int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size, (10, 20, 30)).save(path)
+
+
+def _ids(pieces: list[ArtPiece]) -> list[str]:
+    return [piece.id for piece in pieces]
+
+
+def test_eligible_keeps_tall_piece_in_ente_folder(tmp_path):
+    _write_sized(tmp_path / "ente-abc123" / "f1.jpg", (60, 120))
+
+    assert _ids(ArtLibrary(tmp_path).eligible(1.3)) == ["ente-abc123/f1.jpg"]
+
+
+def test_eligible_still_drops_tall_piece_in_other_folder_and_top_level(tmp_path):
+    _write_sized(tmp_path / "Photos" / "tall.jpg", (60, 120))
+    _write_sized(tmp_path / "tall.jpg", (60, 120))
+    _write_sized(tmp_path / "wide.jpg", (160, 80))
+
+    assert _ids(ArtLibrary(tmp_path).eligible(1.3)) == ["wide.jpg"]
+
+
+def test_ente_prefix_match_is_case_insensitive_and_needs_a_folder(tmp_path):
+    _write_sized(tmp_path / "ENTE-Abc" / "f1.jpg", (60, 120))
+    _write_sized(tmp_path / "ente-x.jpg", (60, 120))
+    pieces = {piece.id: piece for piece in ArtLibrary(tmp_path).pieces()}
+
+    assert is_landscape_exempt(pieces["ENTE-Abc/f1.jpg"])
+    assert not is_landscape_exempt(pieces["ente-x.jpg"])
+    assert _ids(ArtLibrary(tmp_path).eligible(1.3)) == ["ENTE-Abc/f1.jpg"]
+
+
+def test_exempt_corrupt_image_still_skipped(tmp_path):
+    folder = tmp_path / "ente-abc123"
+    folder.mkdir()
+    (folder / "bad.jpg").write_bytes(b"not an image")
+    _write_sized(folder / "good.jpg", (60, 120))
+
+    assert _ids(ArtLibrary(tmp_path).eligible(1.3)) == ["ente-abc123/good.jpg"]
+
+
+def test_pick_returns_tall_ente_piece_when_it_is_the_only_one(tmp_path):
+    _write_sized(tmp_path / "Photos" / "tall.jpg", (60, 120))
+    _write_sized(tmp_path / "ente-abc123" / "f1.jpg", (60, 120))
+
+    piece = ArtLibrary(tmp_path).pick(NOW, 60, min_aspect=1.3)
+
+    assert piece is not None
+    assert piece.id == "ente-abc123/f1.jpg"
+
+
+def test_exempt_piece_is_sorted_among_others_by_id(tmp_path):
+    _write_sized(tmp_path / "a.jpg", (160, 80))
+    _write_sized(tmp_path / "ente-abc123" / "f1.jpg", (60, 120))
+    _write_sized(tmp_path / "zed" / "z.jpg", (160, 80))
+
+    assert _ids(ArtLibrary(tmp_path).eligible(1.3)) == [
+        "a.jpg",
+        "ente-abc123/f1.jpg",
+        "zed/z.jpg",
+    ]

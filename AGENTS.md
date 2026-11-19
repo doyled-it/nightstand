@@ -72,6 +72,13 @@ serves over the LAN. Never commit these; they are written on the device.
   art history. The hub republishes both same-origin for the room-picker page's
   live frame mirror; a missing file hides the mirror.
 
+Shared folders: Ente albums reach the frame through the same art index as any
+other folder. `artsync` mirrors an enabled `ente-<albumId>` folder to the same
+relative path with a sidecar whose line 1 is the album title, removes the files
+and the directory when the folder is switched off or a piece disappears, and
+ignores index keys it does not know (a piece `source`, the top-level
+`ente_sync`). The sync code needed no Ente-specific branch.
+
 Art sidecar captions (`<image file>.txt`, one beside each image): line 1 title,
 line 2 artist (may be empty), optional line 3 the museum object page as an
 `https` URL (ignored unless it parses as https). Without a sidecar the title
@@ -92,7 +99,11 @@ rotation does not. The art redraw key is `("art", id)`.
 Art shape: the display rotates only pieces at least `art.min_aspect` times wider
 than tall (default 1.3); narrower pieces stay in the library but are skipped.
 `ArtLibrary` caches each image's aspect so the filter does not decode every
-image each cycle. The art screen cover-crops with a detail-aware window
+image each cycle. The exception is Ente albums: a piece whose id starts with
+`ente-` (`ente-<albumId>/<fileId>.jpg`, the hub's read-only mirror of an Ente
+Photos album) is exempt from `min_aspect`, so tall Ente pieces rotate and can be
+shown (`art.is_landscape_exempt`; a top-level file is never exempt). The art
+screen cover-crops with a detail-aware window
 (`screens/common.detail_crop`) that slides the crop along the overflowing axis
 toward the busiest region, so a subject near an edge is not cut. The
 `nightstand art fetch` helper discards a downloaded work below `--min-aspect`

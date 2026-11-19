@@ -298,3 +298,120 @@ def test_stops_and_discards_a_stream_past_the_cap(tmp_path, monkeypatch):
     assert result.added == 0
     assert not (tmp_path / "big.jpg").exists()
     assert not (tmp_path / "big.jpg.part").exists()
+
+
+def _ente_piece(pid: str, *, size: int, title: str = "Album One") -> dict:
+    piece = _piece(pid, folder=pid.split("/")[0], size=size, title=title)
+    piece["source"] = "ente"
+    piece["landscape"] = False
+    return piece
+
+
+def test_ente_pieces_mirror_with_folder_layout_and_sidecar(tmp_path):
+    hub = FakeHub(
+        index=_index([_ente_piece("ente-101/5001.jpg", size=3)]),
+        files={"/art/ente-101/5001.jpg": b"abc"},
+    )
+
+    result = _sync(hub, tmp_path, enabled={"ente-101"})
+
+    assert result.added == 1
+    assert (tmp_path / "ente-101" / "5001.jpg").read_bytes() == b"abc"
+    sidecar = (tmp_path / "ente-101" / "5001.jpg.txt").read_text().splitlines()
+    assert sidecar[0] == "Album One"
+
+
+def test_ente_folder_switched_off_removes_its_files_and_dir(tmp_path):
+    hub = FakeHub(
+        index=_index(
+            [
+                _piece("met-1.jpg", folder="Collection", size=3),
+                _ente_piece("ente-101/5001.jpg", size=3),
+            ]
+        ),
+        files={"/art/met-1.jpg": b"abc", "/art/ente-101/5001.jpg": b"abc"},
+    )
+    _sync(hub, tmp_path, enabled={"Collection", "ente-101"})
+    assert (tmp_path / "ente-101" / "5001.jpg").exists()
+
+    result = _sync(hub, tmp_path, enabled={"Collection"})
+
+    assert result.removed == 2  # the image and its sidecar
+    assert not (tmp_path / "ente-101").exists()
+    assert (tmp_path / "met-1.jpg").exists()
+
+
+def test_removed_ente_piece_deleted_on_next_sync(tmp_path):
+    hub = FakeHub(
+        index=_index(
+            [
+                _ente_piece("ente-101/5001.jpg", size=3),
+                _ente_piece("ente-101/5002.jpg", size=3),
+            ]
+        ),
+        files={
+            "/art/ente-101/5001.jpg": b"abc",
+            "/art/ente-101/5002.jpg": b"abc",
+        },
+    )
+    _sync(hub, tmp_path)
+
+    hub.index = _index([_ente_piece("ente-101/5001.jpg", size=3)])
+    result = _sync(hub, tmp_path)
+
+    assert result.removed == 2
+    assert (tmp_path / "ente-101" / "5001.jpg").exists()
+    assert not (tmp_path / "ente-101" / "5002.jpg").exists()
+    assert not (tmp_path / "ente-101" / "5002.jpg.txt").exists()
+
+
+def test_index_with_unknown_source_and_ente_sync_keys_is_tolerated(tmp_path):
+    index = _index([_ente_piece("ente-101/5001.jpg", size=3)])
+    index["ente_sync"] = {"state": "failing", "last_success": None, "error": "x"}
+    index["folders"] = [
+        {
+            "name": "ente-101",
+            "count": 1,
+            "enabled": True,
+            "builtin": False,
+            "source": "ente",
+            "title": "Album One",
+        },
+        {"name": "Odd", "count": 0, "enabled": True, "source": "mystery"},
+    ]
+    odd = _piece("Odd/a.jpg", folder="Odd", size=3)
+    odd["source"] = "mystery"
+    odd["extra"] = {"nested": [1, 2]}
+    index["pieces"].append(odd)
+    hub = FakeHub(
+        index=index,
+        files={"/art/ente-101/5001.jpg": b"abc", "/art/Odd/a.jpg": b"abc"},
+    )
+
+    result = _sync(hub, tmp_path)
+
+    assert result.added == 2
+    assert (tmp_path / "ente-101" / "5001.jpg").exists()
+    assert (tmp_path / "Odd" / "a.jpg").exists()
+
+
+def test_unsafe_ente_looking_id_still_refused(tmp_path):
+    hub = FakeHub(
+        index=_index(
+            [
+                _ente_piece("ente-101/5001.jpg", size=3),
+                _ente_piece("ente-x/../a.jpg", size=3),
+            ]
+        ),
+        files={
+            "/art/ente-101/5001.jpg": b"abc",
+            "/art/ente-x/../a.jpg": b"abc",
+            "/art/a.jpg": b"abc",
+        },
+    )
+
+    result = _sync(hub, tmp_path)
+
+    assert result.added == 1
+    assert not (tmp_path / "a.jpg").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ente-101"]
