@@ -178,7 +178,10 @@ identifying in any request (no name, email, address, or home location).
   top-level `pin` the frame treats as the nightstand's, so the nightstand keeps
   working whichever side updates first. The frame derives a now-playing category
   from the track's `kind` and `genre` (`rules.category`) to apply the kinds
-  filter. The pin holds one screen (the art piece, the weather, or now playing)
+  filter. A track with nothing but a title (no artist, album, genre, or
+  duration, as some phone apps send over Bluetooth) is category `unknown`, which
+  is never an enabled kind, so it stays off the frame unless a now-playing pin
+  is active. The pin holds one screen (the art piece, the weather, or now playing)
   for a while or until unpinned, ignoring the normal schedule; a new pin (a higher
   `seq`) redraws once even in quiet hours, a live game still wins over a pin, and a
   pinned art piece that has been deleted falls back to the schedule. The "Frame

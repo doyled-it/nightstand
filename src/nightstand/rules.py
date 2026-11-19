@@ -94,13 +94,22 @@ def in_morning_window(now: datetime, cfg: Config) -> bool:
 
 
 def category(np: NowPlaying) -> str:
-    """The now-playing category: ``"music"``, ``"podcast"``, or ``"audiobook"``.
+    """The now-playing category: ``"music"``, ``"podcast"``, ``"audiobook"``, or
+    ``"unknown"``.
 
-    The genre decides when it names a category: an audiobook or spoken-word
+    A track with nothing but a title (no artist, album, genre, or duration) is
+    ``"unknown"``. Some phone apps send only a placeholder title over Bluetooth,
+    so there is nothing to tell music from an audiobook. ``"unknown"`` is never
+    an enabled kind, so such a track stays off the frame unless a now-playing
+    pin is active.
+
+    Otherwise the genre decides when it names a category: an audiobook or spoken-word
     genre is an audiobook, a podcast genre is a podcast. Otherwise a long-form
     track with no telling genre is a podcast (libro.fm and some apps send no
     genre), and everything else is music.
     """
+    if not (np.artist or np.album or np.genre or np.duration):
+        return "unknown"
     text = " ".join(g.lower() for g in np.genre)
     if any(word in text for word in _AUDIOBOOK_WORDS):
         return "audiobook"
@@ -118,7 +127,8 @@ def now_playing_for_frame(
 
     A now-playing pin shows any kind. Otherwise the track takes the frame only
     when its category is one of the enabled ``kinds``; a track of a disabled kind
-    is dropped, so the decision behaves as if nothing were playing.
+    is dropped, so the decision behaves as if nothing were playing. An
+    ``"unknown"`` track is never an enabled kind, so it is dropped too.
     """
     if np is None:
         return None
