@@ -402,6 +402,57 @@ def test_now_playing_pin_passes_any_kind():
     assert rules.now_playing_for_frame(podcast, ("music",), pin) is podcast
 
 
+def _placeholder() -> NowPlaying:
+    # What a phone app sends over Bluetooth when it has only a placeholder title.
+    return NowPlaying(title="Not Provided", artist="", kind="music")
+
+
+def test_a_track_with_only_a_title_is_unknown():
+    assert rules.category(_placeholder()) == "unknown"
+
+
+def test_unknown_track_stays_off_the_frame_for_any_kinds():
+    np = _placeholder()
+
+    assert rules.now_playing_for_frame(np, ("music",), None) is None
+    all_kinds = ("music", "podcast", "audiobook")
+    assert rules.now_playing_for_frame(np, all_kinds, None) is None
+
+
+def test_unknown_track_takes_the_frame_under_a_now_playing_pin():
+    np = _placeholder()
+    pin = Pin(what="now_playing", piece=None, until=None, seq=1, set_at=None)
+
+    assert rules.now_playing_for_frame(np, ("music",), pin) is np
+
+
+def test_a_title_and_artist_is_still_music():
+    np = NowPlaying(title="T", artist="A", kind="music")
+
+    assert rules.category(np) == "music"
+    assert rules.now_playing_for_frame(np, ("music",), None) is np
+
+
+def test_a_title_and_duration_follow_the_existing_rules():
+    short = NowPlaying(title="T", artist="", kind="music", duration=200.0)
+    long = NowPlaying(title="T", artist="", kind="long_form", duration=7200.0)
+
+    assert rules.category(short) == "music"
+    assert rules.category(long) == "podcast"
+
+
+def test_a_title_and_album_only_is_still_music():
+    assert rules.category(NowPlaying(title="T", artist="", album="Al")) == "music"
+
+
+def test_a_title_and_genre_only_decides_by_genre():
+    book = NowPlaying(title="T", artist="", genre=("Audiobook",))
+    rock = NowPlaying(title="T", artist="", genre=("Rock",))
+
+    assert rules.category(book) == "audiobook"
+    assert rules.category(rock) == "music"
+
+
 def test_filter_passes_none_through():
     assert rules.now_playing_for_frame(None, ("music",), None) is None
 
