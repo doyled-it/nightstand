@@ -258,3 +258,18 @@ def test_commit_without_a_decided_advance_is_a_no_op(tmp_path):
     saved = json.loads((tmp_path / "rotation.json").read_text())
     assert saved["current_id"] == first.id
     assert saved["back"] == []
+
+
+def test_last_applied_seq_names_only_the_command_that_ran(tmp_path):
+    elig = pieces(3)
+    rot = a_rotation(tmp_path)
+
+    rot.apply(cmd(5), elig, T0)  # startup baseline: adopted, not run
+    assert rot.last_applied_seq is None
+
+    show(rot, elig, T0)
+    assert rot.apply(cmd(6), elig, T0) is True
+    assert rot.last_applied_seq == 6
+
+    rot.apply(cmd(6), elig, T0)  # replay of the same seq does nothing
+    assert rot.last_applied_seq is None

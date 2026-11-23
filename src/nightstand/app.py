@@ -152,6 +152,7 @@ class ArtView:
 
     piece: ArtPiece | None
     forced: bool = False
+    seq: int | None = None
 
 
 class Sources(Protocol):
@@ -396,10 +397,15 @@ class LiveSources:
             else self._cfg.art.rotate_minutes
         )
         forced = False
+        seq = None
         if control is not None:
             forced = self._rotation.apply(control, eligible, now)
+            if forced:
+                # Only a command that ran and moved the piece carries its seq, so
+                # the mirror's ``pending`` and ``applied_seq`` follow real changes.
+                seq = self._rotation.last_applied_seq
         piece = self._rotation.current(eligible, now, interval)
-        return ArtView(piece=piece, forced=forced)
+        return ArtView(piece=piece, forced=forced, seq=seq)
 
     def commit_art(self, now: datetime) -> None:
         # Confirm a scheduled advance only when the art screen actually reached
@@ -520,6 +526,12 @@ class AppState:
     pin_seq: int | None = None
     pin_seen: bool = False
     pin_eval_failing: bool = False
+    #: The latest command this frame applied (its seq and the piece id it moved
+    #: to), and the highest seq whose piece has reached the panel. Both feed the
+    #: mirror's ``applied_seq`` and ``pending`` (see ``_write_pending``).
+    cmd_seq: int | None = None
+    cmd_id: str | None = None
+    applied_seq: int | None = None
 
 
 def _settled(
@@ -669,9 +681,23 @@ def run_once(
         decision = replace(decision, forced=True)
 
     identity = (np.title, np.artist, np.album) if np is not None else None
+    # A command that moved the piece this cycle: remember it so the mirror can
+    # announce the target (``pending``) and later confirm it (``applied_seq``).
+    command = art_view.seq is not None and art_piece is not None
+    if command:
+        state.cmd_seq = art_view.seq
+        state.cmd_id = art_piece.id or art_piece.title
+    wait_reason = None
+    if command and decision.screen != "art":
+        wait_reason = _wait_reason(decision.screen, pin)
     if not _settled(state, identity, now, cfg):
         # A changed identity is waiting out the settle, not yet on the panel.
         _log_held(state, "settling", decision.screen, identity)
+        if command:
+            _write_pending(
+                state, cfg.paths.public, state.cmd_seq, state.cmd_id,
+                "waiting", "settling", now,
+            )
         return False
 
     if pin is not None and (state.pin_seq is None or pin.seq > state.pin_seq):
@@ -699,20 +725,54 @@ def run_once(
             # Nothing is held this cycle, so forget any earlier hold: a later
             # recurrence of it is a fresh hold and logs again.
             state.last_held = None
+        if wait_reason is not None:
+            _write_pending(
+                state, cfg.paths.public, state.cmd_seq, state.cmd_id,
+                "waiting", wait_reason, now,
+            )
         return False
 
     image = _render(
         decision.screen, cfg, sources, now, np, game_state, forecast, art_piece
     )
     image = marker.apply(image, health)
-    display.show(image)
+    if command and decision.screen == "art":
+        _write_pending(
+            state, cfg.paths.public, state.cmd_seq, state.cmd_id,
+            "changing", None, now,
+        )
+    try:
+        display.show(image)
+    except Exception:
+        if command and decision.screen == "art":
+            _write_pending(
+                state, cfg.paths.public, state.cmd_seq, state.cmd_id,
+                "failed", None, now,
+            )
+        raise
     logger.info(
         "pushed %s%s (%s)",
         decision.screen,
         _push_detail(decision.screen, np, art_piece),
         "forced" if decision.forced else "scheduled",
     )
+    if (
+        decision.screen == "art"
+        and art_piece is not None
+        and state.cmd_id is not None
+        and (art_piece.id or art_piece.title) == state.cmd_id
+    ):
+        # The commanded piece is on the panel: this and every later mirror write
+        # carries its seq, which is how the page knows the change is done.
+        state.applied_seq = state.cmd_seq
     _write_mirror(state, cfg.paths.public, image, decision.screen, now)
+    if wait_reason is not None:
+        # The panel took another screen; the piece is next but not drawn. The
+        # mirror write above cleared ``pending``, so announce it again.
+        _write_pending(
+            state, cfg.paths.public, state.cmd_seq, state.cmd_id,
+            "waiting", wait_reason, now,
+        )
     state.last_key = key
     state.last_held = None
     state.shown_identity = identity
@@ -728,6 +788,21 @@ def run_once(
             # redraw under the same slot (a marker flip, say) adds no duplicate.
             _record_history(state, history, art_piece, now)
     return True
+
+
+def _wait_reason(screen: str, pin) -> str | None:
+    """Why a commanded piece is not drawn now, in the contract's words.
+
+    ``None`` for a screen with no named reason (an unpinned weather morning, say):
+    the page then ends in its 90 s "did not confirm" message.
+    """
+    if pin is not None:
+        return "pin"
+    if screen in ("now_playing", "split"):
+        return "music"
+    if screen == "game":
+        return "game"
+    return None
 
 
 def _record_history(
@@ -769,7 +844,7 @@ def _write_mirror(
     stop the loop, so the error is swallowed and logged once per outage.
     """
     try:
-        _write_mirror_files(public, image, screen, now)
+        _write_mirror_files(public, image, screen, now, state.applied_seq)
     except OSError as error:
         if not state.mirror_write_failing:
             state.mirror_write_failing = True
@@ -781,15 +856,80 @@ def _write_mirror(
 
 
 def _write_mirror_files(
-    public: Path, image: Image.Image, screen: str, now: datetime
+    public: Path,
+    image: Image.Image,
+    screen: str,
+    now: datetime,
+    applied_seq: int | None = None,
 ) -> None:
-    """Atomically write ``frame.png`` and ``frame.json`` into ``public``."""
+    """Atomically write ``frame.png`` and ``frame.json`` into ``public``.
+
+    ``applied_seq`` (the latest command whose piece is on the panel) rides along
+    once there is one. ``pending`` is never written here: a push clears it.
+    """
     public.mkdir(parents=True, exist_ok=True)
     buffer = io.BytesIO()
     simulate_panel(image).save(buffer, format="PNG")
     _atomic_write(public / "frame.png", buffer.getvalue())
-    meta = json.dumps({"updated_at": now.isoformat(), "screen": screen}, indent=2)
-    _atomic_write(public / "frame.json", (meta + "\n").encode("utf-8"))
+    document: dict = {"updated_at": now.isoformat(), "screen": screen}
+    if applied_seq is not None:
+        document["applied_seq"] = applied_seq
+    _atomic_write(
+        public / "frame.json", (json.dumps(document, indent=2) + "\n").encode("utf-8")
+    )
+
+
+#: ``since`` is capped to this many characters, the hub validator's limit.
+_PENDING_SINCE_MAX = 40
+
+
+def _write_pending(
+    state: AppState,
+    public: Path,
+    seq: int,
+    piece_id: str,
+    pending_state: str,
+    reason: str | None,
+    now: datetime,
+) -> None:
+    """Announce a command's target in ``frame.json`` without a push.
+
+    Only ``frame.json`` is rewritten, keeping the last ``updated_at`` and
+    ``screen`` (so the hub does not refetch an unchanged ``frame.png``) and the
+    current ``applied_seq``. A failed write is swallowed and logged once per
+    outage, like the mirror itself: feedback must never stop the loop.
+    """
+    pending = {
+        "seq": seq,
+        "id": piece_id,
+        "since": now.isoformat()[:_PENDING_SINCE_MAX],
+        "state": pending_state,
+        "reason": reason,
+    }
+    try:
+        path = public / "frame.json"
+        document: dict = {"updated_at": now.isoformat(), "screen": "art"}
+        try:
+            existing = json.loads(path.read_text())
+            if isinstance(existing, dict):
+                for key in ("updated_at", "screen"):
+                    if isinstance(existing.get(key), str) and existing[key]:
+                        document[key] = existing[key]
+        except (OSError, ValueError):
+            pass
+        if state.applied_seq is not None:
+            document["applied_seq"] = state.applied_seq
+        document["pending"] = pending
+        public.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, (json.dumps(document, indent=2) + "\n").encode("utf-8"))
+    except OSError as error:
+        if not state.mirror_write_failing:
+            state.mirror_write_failing = True
+            logger.warning("frame mirror write failed: %s", error)
+        return
+    if state.mirror_write_failing:
+        state.mirror_write_failing = False
+        logger.info("frame mirror write recovered")
 
 
 def _atomic_write(path: Path, data: bytes) -> None:

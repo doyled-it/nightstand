@@ -71,6 +71,19 @@ serves over the LAN. Never commit these; they are written on the device.
   A write failure never stops the loop; it is logged once per outage, like the
   art history. The hub republishes both same-origin for the room-picker page's
   live frame mirror; a missing file hides the mirror.
+- `frame.json` also carries two optional fields for the page's change feedback
+  (contract in the hub's `docs/cross-repo-features.md`). `pending`
+  (`{"seq", "id", "since", "state", "reason"}`) is written on the cycle a next,
+  previous or show command moves the piece, before the e-ink push (`changing`),
+  or when the piece is next but the frame draws another screen (`waiting`, reason
+  `music`, `game`, `pin` or `settling`), or when the push raised (`failed`). Any
+  later mirror write drops it, and a newer command replaces it. `applied_seq` is
+  the seq of the latest command whose piece is on the panel, written on every
+  mirror write after it and absent until the first. Confirmation is by seq only,
+  never by comparing clocks. `ArtView.seq` (from `Rotation.last_applied_seq`) is
+  set only for a command that ran for this frame and moved the piece, so another
+  frame's command, a replay and the startup baseline write nothing. An unpinned
+  screen with no named reason (the morning weather) writes no `pending`.
 
 Shared folders: Ente albums reach the frame through the same art index as any
 other folder. `artsync` mirrors an enabled `ente-<albumId>` folder to the same
