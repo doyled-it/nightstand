@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 from PIL import Image
 
 from nightstand import rules
@@ -74,6 +75,7 @@ class FakeSources:
         self.forecast_obj = None
         self.art_piece: ArtPiece | None = None
         self.art_forced = False
+        self.art_seq: int | None = None
         self.health_obj = Health()
         self.control: FrameControl | None = None
         # Records the last pin hints the loop passed down, so a test can assert
@@ -106,7 +108,9 @@ class FakeSources:
 
     def art(self, now, pinned_piece=None):
         self.art_pinned_piece = pinned_piece
-        return ArtView(piece=self.art_piece, forced=self.art_forced)
+        return ArtView(
+            piece=self.art_piece, forced=self.art_forced, seq=self.art_seq
+        )
 
     def commit_art(self, now):
         # A fixed-piece fake has no rotation to advance; the real wiring is
@@ -2050,3 +2054,257 @@ def test_live_sources_forecast_fetched_every_30_minutes_while_weather_pinned(tmp
     assert _min_gap_minutes(client.forecast_at) >= 30
     assert any(when.hour >= 12 for when in client.forecast_at)  # afternoon too
     assert len(client.forecast_at) >= 40  # about 48 over the day
+
+
+# --- frame change feedback: pending and applied_seq in frame.json ------------ #
+
+
+def _cmd_setup(tmp_path, seq=13, piece_id="next.png"):
+    cfg = replace(_loop_config(), paths=replace(_loop_config().paths, public=tmp_path))
+    art_path = tmp_path / "piece.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(art_path)
+    sources = FakeSources()
+    sources.art_piece = ArtPiece(path=art_path, title="Title", id=piece_id)
+    sources.art_forced = True
+    sources.art_seq = seq
+    return cfg, sources
+
+
+class _MirrorSpyDisplay(RecordingDisplay):
+    """Records frame.json as it was at the moment of each push."""
+
+    def __init__(self, public: Path) -> None:
+        super().__init__()
+        self.public = public
+        self.meta_at_show: list[dict | None] = []
+
+    def show(self, img):
+        path = self.public / "frame.json"
+        meta = json.loads(path.read_text()) if path.exists() else None
+        self.meta_at_show.append(meta)
+        super().show(img)
+
+
+def test_command_writes_changing_pending_before_the_push(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    display = _MirrorSpyDisplay(tmp_path)
+
+    assert run_once(AppState(), cfg, sources, display, NOON) is True
+
+    pending = display.meta_at_show[0]["pending"]
+    assert pending == {
+        "seq": 13,
+        "id": "next.png",
+        "since": NOON.isoformat(),
+        "state": "changing",
+        "reason": None,
+    }
+
+
+def test_pending_is_cleared_and_applied_seq_set_after_the_push(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), NOON)
+
+    meta = _read_mirror(tmp_path)
+    assert "pending" not in meta
+    assert meta["applied_seq"] == 13
+    assert meta["screen"] == "art"
+
+
+def test_applied_seq_stays_on_later_mirror_writes(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    state = AppState()
+    run_once(state, cfg, sources, RecordingDisplay(), NOON)
+    sources.art_forced = False
+    sources.art_seq = None
+    sources.art_piece = replace(sources.art_piece, id="other.png")
+
+    run_once(state, cfg, sources, RecordingDisplay(), NOON + timedelta(minutes=5))
+
+    assert _read_mirror(tmp_path)["applied_seq"] == 13
+
+
+def test_no_command_writes_neither_field(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    sources.art_forced = False
+    sources.art_seq = None
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), NOON)
+
+    assert _read_mirror(tmp_path) == {"updated_at": NOON.isoformat(), "screen": "art"}
+
+
+def test_command_while_music_plays_writes_waiting_music(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    sources.np = NowPlaying("Song", "Artist")
+    state = AppState()
+    state.shown_identity = ("Song", "Artist", None)
+
+    run_once(state, cfg, sources, RecordingDisplay(), NOON)
+
+    pending = _read_mirror(tmp_path)["pending"]
+    assert pending["state"] == "waiting"
+    assert pending["reason"] == "music"
+    assert pending["seq"] == 13 and pending["id"] == "next.png"
+    assert "applied_seq" not in _read_mirror(tmp_path)
+
+
+def test_command_while_a_game_is_on_writes_waiting_game(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    feed = json.loads((FIXTURES / "mlb" / "feed_scoring_play.json").read_text())
+    sources.game_state = mlb.parse_game(feed)
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), NOON)
+
+    assert _read_mirror(tmp_path)["pending"]["reason"] == "game"
+
+
+def test_command_while_pinned_writes_waiting_pin(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    sources.forecast_obj = _a_forecast()
+    sources.control = _frame_control(pin=Pin("weather", None, None, 1, None))
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), NOON)
+
+    assert _read_mirror(tmp_path)["pending"]["reason"] == "pin"
+
+
+def test_command_during_the_settle_writes_waiting_settling(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    sources.np = NowPlaying("New song", "Artist")
+
+    assert run_once(AppState(), cfg, sources, RecordingDisplay(), NOON) is False
+
+    pending = _read_mirror(tmp_path)["pending"]
+    assert pending["state"] == "waiting" and pending["reason"] == "settling"
+
+
+def test_waiting_command_is_applied_when_its_piece_reaches_the_panel(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    sources.np = NowPlaying("Song", "Artist")
+    state = AppState()
+    run_once(state, cfg, sources, RecordingDisplay(), NOON)
+    sources.np = None
+    sources.art_forced = False
+    sources.art_seq = None
+
+    later = NOON + timedelta(minutes=10)
+    assert run_once(state, cfg, sources, RecordingDisplay(), later) is True
+
+    meta = _read_mirror(tmp_path)
+    assert "pending" not in meta and meta["applied_seq"] == 13
+
+
+class _ExplodingDisplay:
+    def show(self, img):
+        raise RuntimeError("panel busy")
+
+
+def test_push_error_writes_failed_pending_and_reraises(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+
+    with pytest.raises(RuntimeError):
+        run_once(AppState(), cfg, sources, _ExplodingDisplay(), NOON)
+
+    pending = _read_mirror(tmp_path)["pending"]
+    assert pending["state"] == "failed" and pending["reason"] is None
+    assert "applied_seq" not in _read_mirror(tmp_path)
+
+
+def test_a_newer_command_replaces_pending(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path, seq=13)
+    sources.np = NowPlaying("Song", "Artist")
+    state = AppState()
+    run_once(state, cfg, sources, RecordingDisplay(), NOON)
+    sources.art_seq = 14
+    sources.art_piece = replace(sources.art_piece, id="newer.png")
+
+    run_once(state, cfg, sources, RecordingDisplay(), NOON + timedelta(seconds=10))
+
+    pending = _read_mirror(tmp_path)["pending"]
+    assert pending["seq"] == 14 and pending["id"] == "newer.png"
+
+
+def test_pending_write_failure_is_swallowed_and_logged_once(tmp_path, caplog):
+    blocked = tmp_path / "public"
+    blocked.write_text("not a directory")
+    cfg, sources = _cmd_setup(tmp_path)
+    cfg = replace(cfg, paths=replace(cfg.paths, public=blocked))
+    state = AppState()
+
+    with caplog.at_level(logging.WARNING, logger="nightstand.app"):
+        for i in range(3):
+            sources.art_seq = 20 + i
+            sources.art_piece = replace(sources.art_piece, id=f"{i}.png")
+            assert run_once(state, cfg, sources, RecordingDisplay(), NOON) is True
+
+    warnings = [r for r in caplog.records if "frame mirror write failed" in r.message]
+    assert len(warnings) == 1
+
+
+def _live_art_sources(tmp_path, control, frame_id=""):
+    art_dir = tmp_path / "art"
+    art_dir.mkdir(exist_ok=True)
+    for name in ("a.png", "b.png"):
+        Image.new("RGB", (300, 200), PURE["green"]).save(art_dir / name)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=control)
+
+    cfg = Config(
+        art=Art(dir=art_dir),
+        location=Location(timezone="UTC"),
+        frame=Frame(id=frame_id),
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return LiveSources(
+        cfg,
+        client,
+        cache_dir=tmp_path,
+        state_dir=tmp_path / "state",
+        clock=lambda: NOON,
+    )
+
+
+def test_live_art_view_carries_the_seq_of_a_command_that_moved_the_piece(tmp_path):
+    control = {
+        "settings": {"rotate_minutes": 60, "folders_enabled": ["Collection"]},
+        "command": {"seq": 5, "action": "next", "piece": None},
+    }
+    sources = _live_art_sources(tmp_path, control)
+    assert sources.art(NOON).seq is None  # startup baseline
+    sources.commit_art(NOON)
+
+    control["command"]["seq"] = 6
+
+    view = sources.art(NOON)
+    assert view.forced is True and view.seq == 6
+
+
+def test_live_art_view_has_no_seq_for_a_command_to_another_frame(tmp_path):
+    control = {
+        "settings": {"rotate_minutes": 60, "folders_enabled": ["Collection"]},
+        "command": {"seq": 5, "action": "next", "piece": None, "frame": "office"},
+    }
+    sources = _live_art_sources(tmp_path, control, frame_id="nightstand")
+    sources.art(NOON)
+    sources.commit_art(NOON)
+    control["command"]["seq"] = 6
+
+    view = sources.art(NOON)
+
+    assert view.forced is False and view.seq is None
+
+
+def test_command_during_the_morning_weather_writes_waiting_screen(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    data = json.loads((FIXTURES / "openmeteo" / "forecast.json").read_text())
+    sources.forecast_obj = weather_source.parse_forecast(data, MORNING)
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), MORNING)
+
+    meta = _read_mirror(tmp_path)
+    assert meta["screen"] == "weather"
+    assert meta["pending"]["state"] == "waiting"
+    assert meta["pending"]["reason"] == "screen"

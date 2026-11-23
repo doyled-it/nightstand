@@ -54,6 +54,8 @@ class Rotation:
         self._current_id: str | None = None
         self._shown_at: datetime | None = None
         self._last_seq: int | None = None
+        #: The seq of the command the latest ``apply`` call executed, else None.
+        self.last_applied_seq: int | None = None
         self._back: list[str] = []
         # A scheduled advance decided by ``current`` but not yet committed: the
         # piece to move to and the eligible set at the time it was decided. The
@@ -134,6 +136,7 @@ class Rotation:
         whose ``seq`` is greater than the last applied one runs.
         """
         now = now if now is not None else self._clock()
+        self.last_applied_seq = None
         first = self._first_apply
         self._first_apply = False
 
@@ -147,6 +150,7 @@ class Rotation:
             return False
 
         changed = self._execute(command, eligible, now)
+        self.last_applied_seq = command.seq
         self._last_seq = command.seq
         self._persist()
         return changed
