@@ -790,11 +790,11 @@ def run_once(
     return True
 
 
-def _wait_reason(screen: str, pin) -> str | None:
+def _wait_reason(screen: str, pin) -> str:
     """Why a commanded piece is not drawn now, in the contract's words.
 
-    ``None`` for a screen with no named reason (an unpinned weather morning, say):
-    the page then ends in its 90 s "did not confirm" message.
+    ``screen`` is the generic reason for any other scheduled screen (the morning
+    weather, say), so the page says "Up next" instead of timing out.
     """
     if pin is not None:
         return "pin"
@@ -802,7 +802,7 @@ def _wait_reason(screen: str, pin) -> str | None:
         return "music"
     if screen == "game":
         return "game"
-    return None
+    return "screen"
 
 
 def _record_history(

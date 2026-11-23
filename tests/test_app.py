@@ -2295,3 +2295,16 @@ def test_live_art_view_has_no_seq_for_a_command_to_another_frame(tmp_path):
     view = sources.art(NOON)
 
     assert view.forced is False and view.seq is None
+
+
+def test_command_during_the_morning_weather_writes_waiting_screen(tmp_path):
+    cfg, sources = _cmd_setup(tmp_path)
+    data = json.loads((FIXTURES / "openmeteo" / "forecast.json").read_text())
+    sources.forecast_obj = weather_source.parse_forecast(data, MORNING)
+
+    run_once(AppState(), cfg, sources, RecordingDisplay(), MORNING)
+
+    meta = _read_mirror(tmp_path)
+    assert meta["screen"] == "weather"
+    assert meta["pending"]["state"] == "waiting"
+    assert meta["pending"]["reason"] == "screen"

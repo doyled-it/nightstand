@@ -76,14 +76,14 @@ serves over the LAN. Never commit these; they are written on the device.
   (`{"seq", "id", "since", "state", "reason"}`) is written on the cycle a next,
   previous or show command moves the piece, before the e-ink push (`changing`),
   or when the piece is next but the frame draws another screen (`waiting`, reason
-  `music`, `game`, `pin` or `settling`), or when the push raised (`failed`). Any
+  `music`, `game`, `pin`, `settling` or `screen`, the generic one for any other scheduled
+  screen such as the morning weather), or when the push raised (`failed`). Any
   later mirror write drops it, and a newer command replaces it. `applied_seq` is
   the seq of the latest command whose piece is on the panel, written on every
   mirror write after it and absent until the first. Confirmation is by seq only,
   never by comparing clocks. `ArtView.seq` (from `Rotation.last_applied_seq`) is
   set only for a command that ran for this frame and moved the piece, so another
-  frame's command, a replay and the startup baseline write nothing. An unpinned
-  screen with no named reason (the morning weather) writes no `pending`.
+  frame's command, a replay and the startup baseline write nothing.
 
 Shared folders: Ente albums reach the frame through the same art index as any
 other folder. `artsync` mirrors an enabled `ente-<albumId>` folder to the same
