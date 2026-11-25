@@ -415,3 +415,114 @@ def test_unsafe_ente_looking_id_still_refused(tmp_path):
     assert result.added == 1
     assert not (tmp_path / "a.jpg").exists()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["ente-101"]
+
+
+# --- crop boxes ----------------------------------------------------------- #
+
+BOX = {"x": 0.1, "y": 0.05, "w": 0.6, "h": 0.6}
+AUTO = {"x": 0.0, "y": 0.0, "w": 1.0, "h": 0.5}
+
+
+def _sync_boxes(hub: FakeHub, dest, crops_path, enabled=None) -> SyncResult:
+    with httpx.Client(transport=hub.transport) as client:
+        return sync_index(
+            client, INDEX_URL, BASE_URL, dest, enabled, crops_path=crops_path
+        )
+
+
+def _loaded(crops_path):
+    from nightstand.crops import CropMap
+
+    return CropMap(crops_path).load()
+
+
+def test_sync_keeps_each_pieces_crop_and_auto_crop(tmp_path):
+    crops = tmp_path / "state" / "art-crops.json"
+    dest = tmp_path / "art"
+    plain = _piece("met-1.jpg", folder="Collection", size=3)
+    boxed = _piece("Photos/beach.jpg", folder="Photos", size=4)
+    boxed["crop"] = BOX
+    boxed["auto_crop"] = AUTO
+    hub = FakeHub(
+        index=_index([plain, boxed]),
+        files={"/art/met-1.jpg": b"abc", "/art/Photos/beach.jpg": b"abcd"},
+    )
+
+    _sync_boxes(hub, dest, crops)
+
+    loaded = _loaded(crops)
+    assert loaded["Photos/beach.jpg"] == ((0.1, 0.05, 0.6, 0.6), (0.0, 0.0, 1.0, 0.5))
+    # An older hub that sends neither key: the piece is listed with no boxes.
+    assert loaded["met-1.jpg"] == (None, None)
+
+
+def test_sync_ignores_a_malformed_box_but_keeps_the_piece(tmp_path):
+    crops = tmp_path / "art-crops.json"
+    piece = _piece("a.jpg", folder="Collection", size=3)
+    piece["crop"] = {"x": "0", "y": 0, "w": 1, "h": 1}
+    piece["auto_crop"] = [1, 2]
+    hub = FakeHub(index=_index([piece]), files={"/art/a.jpg": b"abc"})
+
+    _sync_boxes(hub, tmp_path / "art", crops)
+
+    assert _loaded(crops) == {"a.jpg": (None, None)}
+
+
+def test_sync_updates_a_changed_box_and_clears_a_removed_one(tmp_path):
+    crops = tmp_path / "art-crops.json"
+    dest = tmp_path / "art"
+    piece = _piece("a.jpg", folder="Collection", size=3)
+    piece["crop"] = BOX
+    hub = FakeHub(index=_index([piece]), files={"/art/a.jpg": b"abc"})
+    _sync_boxes(hub, dest, crops)
+    assert _loaded(crops)["a.jpg"][0] == (0.1, 0.05, 0.6, 0.6)
+
+    piece["crop"] = None
+    piece["auto_crop"] = AUTO
+    _sync_boxes(hub, dest, crops)
+    assert _loaded(crops)["a.jpg"] == (None, (0.0, 0.0, 1.0, 0.5))
+
+
+def test_sync_prunes_boxes_for_pieces_that_are_gone_or_disabled(tmp_path):
+    crops = tmp_path / "art-crops.json"
+    dest = tmp_path / "art"
+    keep = _piece("a.jpg", folder="Collection", size=3)
+    gone = _piece("b.jpg", folder="Collection", size=3)
+    off = _piece("Off/c.jpg", folder="Off", size=3)
+    for piece in (keep, gone, off):
+        piece["crop"] = BOX
+    hub = FakeHub(
+        index=_index([keep, gone, off]),
+        files={"/art/a.jpg": b"abc", "/art/b.jpg": b"abc", "/art/Off/c.jpg": b"abc"},
+    )
+    _sync_boxes(hub, dest, crops)
+    assert set(_loaded(crops)) == {"a.jpg", "b.jpg", "Off/c.jpg"}
+
+    hub.index = _index([keep, gone, off])
+    hub.index["pieces"].remove(gone)
+    _sync_boxes(hub, dest, crops, enabled={"Collection"})
+    assert set(_loaded(crops)) == {"a.jpg"}
+
+
+def test_sync_leaves_the_boxes_alone_when_the_index_is_unusable(tmp_path):
+    crops = tmp_path / "art-crops.json"
+    dest = tmp_path / "art"
+    piece = _piece("a.jpg", folder="Collection", size=3)
+    piece["crop"] = BOX
+    hub = FakeHub(index=_index([piece]), files={"/art/a.jpg": b"abc"})
+    _sync_boxes(hub, dest, crops)
+
+    hub.index = {"nope": True}
+    _sync_boxes(hub, dest, crops)
+    assert _loaded(crops)["a.jpg"][0] == (0.1, 0.05, 0.6, 0.6)
+
+
+def test_sync_survives_an_unwritable_boxes_file(tmp_path):
+    blocked = tmp_path / "file"
+    blocked.write_text("x")
+    piece = _piece("a.jpg", folder="Collection", size=3)
+    hub = FakeHub(index=_index([piece]), files={"/art/a.jpg": b"abc"})
+
+    result = _sync_boxes(hub, tmp_path / "art", blocked / "art-crops.json")
+
+    assert result.added == 1

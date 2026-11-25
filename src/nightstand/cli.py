@@ -25,6 +25,7 @@ from nightstand import __version__
 from nightstand.app import AppState, LiveSources, run_forever, run_once
 from nightstand.art import ArtLibrary, load_piece_image
 from nightstand.config import Config, load_config
+from nightstand.crops import CROPS_FILE
 from nightstand.display import FileDisplay, InkyDisplay
 from nightstand.models import ArtPiece, Health
 from nightstand.screens import (
@@ -439,7 +440,14 @@ def _art_sync(args: argparse.Namespace) -> int:
     with httpx.Client() as client:
         control = artcontrol.fetch_control(client, authority, config.frame.id)
         enabled = set(control.folders_enabled) if control is not None else None
-        result = sync_index(client, index_url, base_url, dest, enabled)
+        result = sync_index(
+            client,
+            index_url,
+            base_url,
+            dest,
+            enabled,
+            crops_path=config.paths.state / CROPS_FILE,
+        )
     print(
         f"art sync: +{result.added} added, {result.updated} updated, "
         f"{result.removed} removed"

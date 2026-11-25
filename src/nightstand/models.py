@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+#: A crop box ``(x, y, w, h)`` as fractions of the upright picture.
+Box = tuple[float, float, float, float]
+
 
 @dataclass(frozen=True)
 class ArtPiece:
@@ -24,6 +27,10 @@ class ArtPiece:
     or ``Photos/beach.jpg``), the stable identity the hub and the rotation state
     use. It is empty only for a piece built outside the library (a preview
     stand-in), which never takes part in rotation.
+
+    ``crop`` is the owner's saved box and ``auto_crop`` the hub's automatic one
+    (see ``crops``); ``box`` is the one to cut: ``crop`` else ``auto_crop``, or
+    ``None`` when the frame must use its own ``detail_crop``.
     """
 
     path: Path
@@ -31,6 +38,13 @@ class ArtPiece:
     artist: str | None = None
     source_url: str | None = None
     id: str = ""
+    crop: Box | None = None
+    auto_crop: Box | None = None
+
+    @property
+    def box(self) -> Box | None:
+        """The box to cut: the saved crop, else the automatic one, else ``None``."""
+        return self.crop if self.crop is not None else self.auto_crop
 
 
 @dataclass(frozen=True)

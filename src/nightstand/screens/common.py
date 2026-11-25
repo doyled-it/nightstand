@@ -35,6 +35,26 @@ def cover_crop(image: Image.Image, width: int, height: int) -> Image.Image:
     return scaled.crop((left, top, left + width, top + height))
 
 
+def crop_to_panel(
+    image: Image.Image, box: tuple[float, float, float, float]
+) -> Image.Image:
+    """Cut ``box`` (fractions of ``image``), Lanczos-resized to the panel.
+
+    The pixel edges are rounded to the nearest pixel and clamped inside the image
+    (at least one pixel each way). The caller passes an upright image. Raises
+    ``ValueError`` for a box that is not four finite fractions.
+    """
+    x, y, w, h = box
+    width, height = image.size
+    left = min(max(round(x * width), 0), width - 1)
+    top = min(max(round(y * height), 0), height - 1)
+    right = min(max(round((x + w) * width), left + 1), width)
+    bottom = min(max(round((y + h) * height), top + 1), height)
+    return image.crop((left, top, right, bottom)).resize(
+        (WIDTH, HEIGHT), Image.Resampling.LANCZOS
+    )
+
+
 def detail_crop(image: Image.Image, width: int, height: int) -> Image.Image:
     """Cover ``width`` x ``height``, cropping toward the busiest region.
 

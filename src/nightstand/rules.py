@@ -321,8 +321,9 @@ def _split_key(now: datetime, cfg: Config, np: NowPlaying) -> tuple:
 
 def _art_key(piece: ArtPiece) -> tuple:
     # The rotation state machine decides when the piece changes, so the redraw
-    # key is just the current piece's id: it changes exactly when the piece does.
-    return ("art", piece.id)
+    # key is the current piece's id, plus the crop box it is drawn with: it
+    # changes when the piece does, or when its box is saved, edited or removed.
+    return ("art", piece.id, piece.box)
 
 
 def _local(now: datetime, cfg: Config) -> datetime:

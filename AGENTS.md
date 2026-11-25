@@ -29,6 +29,7 @@ pull request. Keep all three green.
 src/nightstand/
   config.py     load_config() and the frozen Config dataclasses
   palette.py    the six-color palette (PURE, PANEL) and conversions
+  crops.py      the hub's crop boxes: parse, the synced map, the drawn record
   text.py       font() loader and wrap() word wrapping
   cli.py        console entry point
   screens/      one module per screen (art, now_playing, game, ...)
@@ -107,7 +108,36 @@ restart resumes rather than jumping. It advances when the hub's interval has
 passed since the last change, follows next/previous/show commands from
 `art-control.json`, and never replays a command it already applied or one seen
 for the first time at startup. A command redraw bypasses quiet hours; scheduled
-rotation does not. The art redraw key is `("art", id)`.
+rotation does not. The art redraw key is `("art", id, box)`, where `box` is the
+piece's effective crop box (see "Crop boxes").
+
+Crop boxes: the hub publishes per piece, in `art-index.json`, a saved `crop` and
+an automatic `auto_crop` (each `{x, y, w, h}` as fractions of the UPRIGHT picture,
+or null; contract in the hub's `docs/cross-repo-features.md`, "Art index file" and
+"Frame crop"). `artsync` keeps them for every mirrored piece in
+`paths.state/art-crops.json` (`{"pieces": {id: {"crop", "auto_crop"}}}`, written
+atomically and only when it changed, pruned to the pieces on the frame; a missing,
+malformed or out-of-range box is stored as null and never fatal). `ArtLibrary`
+attaches them to each `ArtPiece` (`crop`, `auto_crop`, and `box`, which is `crop`
+else `auto_crop`). The art screen cuts `box` from the upright image
+(`load_piece_image` applies `ImageOps.exif_transpose`, so an SMB file that still
+carries an orientation tag crops on the same grid as the hub), rounds the edges to
+pixels, resizes to 800x480 with Lanczos, then `dither_to_panel`. `detail_crop` is
+now only the fallback, for a piece with no valid box or when cutting the box
+fails (logged once per piece). Eligibility: a piece with a valid saved `crop` is
+eligible whatever its aspect and `art.min_aspect`; an `auto_crop` never makes a
+piece eligible. A crop cannot override the folder switches: folders the hub has
+switched off are not mirrored, so their pieces are not on the frame at all (Ente
+stays exempt from `min_aspect` as before). Redraw: after each art push the app
+records the piece id and effective box in `paths.state/art-drawn.json`. When the
+piece on the panel is the recorded one but its box differs (a crop saved, edited
+or removed, the last falling back to `auto_crop`), the decision is forced, so it
+redraws on the next cycle even in quiet hours or under a pin, without moving the
+rotation place. The art redraw key is `("art", id, box)`. A piece with no record
+(the first run after an upgrade, or a different piece than the last drawn) is
+never forced, so boxes appearing for every piece cause no storm. A crop redraw is
+not a command: `pending` and `applied_seq` are untouched, and the mirror
+(`frame.png`, `frame.json`) is rewritten as for any push.
 
 Art shape: the display rotates only pieces at least `art.min_aspect` times wider
 than tall (default 1.3); narrower pieces stay in the library but are skipped.
@@ -115,10 +145,13 @@ than tall (default 1.3); narrower pieces stay in the library but are skipped.
 image each cycle. The exception is Ente albums: a piece whose id starts with
 `ente-` (`ente-<albumId>/<fileId>.jpg`, the hub's read-only mirror of an Ente
 Photos album) is exempt from `min_aspect`, so tall Ente pieces rotate and can be
-shown (`art.is_landscape_exempt`; a top-level file is never exempt). The art
-screen cover-crops with a detail-aware window
-(`screens/common.detail_crop`) that slides the crop along the overflowing axis
-toward the busiest region, so a subject near an edge is not cut. The
+shown (`art.is_landscape_exempt`; a top-level file is never exempt). A piece with a
+saved `crop` is exempt too (see "Crop boxes"). Without a published box the art
+screen cover-crops with a detail-aware window (`screens/common.detail_crop`, now
+the fallback only) that slides the crop along the overflowing axis toward the
+busiest region, so a subject near an edge is not cut; the hub's `auto_crop` is a
+port of that window, pinned by golden tests on generated pictures
+(`tests/test_screens_art_crop.py`). The
 `nightstand art fetch` helper discards a downloaded work below `--min-aspect`
 (default 1.1, matching the hub's rotation cutoff `settings.min_aspect`) before
 writing it, counting it as "skipped (shape)". It also discards a work too faint

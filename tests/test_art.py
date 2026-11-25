@@ -345,3 +345,66 @@ def test_exempt_piece_is_sorted_among_others_by_id(tmp_path):
         "ente-abc123/f1.jpg",
         "zed/z.jpg",
     ]
+
+
+def _crop_map(path: Path, entries: dict) -> Path:
+    from nightstand.crops import CropMap
+
+    crops = path / "state" / "art-crops.json"
+    CropMap(crops).save(entries)
+    return crops
+
+
+GOOD_BOX = {"x": 0.0, "y": 0.0, "w": 1.0, "h": 0.5}
+
+
+def test_pieces_carry_the_synced_boxes(tmp_path):
+    art = tmp_path / "art"
+    (art / "Photos").mkdir(parents=True)
+    _write_image(art / "Photos" / "tall.jpg")
+    crops = _crop_map(tmp_path, {"Photos/tall.jpg": (GOOD_BOX, None)})
+    piece = ArtLibrary(art, crops).pieces()[0]
+    assert piece.crop == (0.0, 0.0, 1.0, 0.5)
+    assert piece.auto_crop is None
+    assert piece.box == (0.0, 0.0, 1.0, 0.5)
+
+
+def _tall(path: Path) -> None:
+    Image.new("RGB", (300, 600), (10, 20, 30)).save(path)
+
+
+def test_a_saved_crop_makes_a_tall_piece_eligible(tmp_path):
+    art = tmp_path / "art"
+    (art / "Photos").mkdir(parents=True)
+    _tall(art / "Photos" / "tall.jpg")
+    _tall(art / "Photos" / "other.jpg")
+    crops = _crop_map(tmp_path, {"Photos/tall.jpg": (GOOD_BOX, None)})
+    library = ArtLibrary(art, crops)
+    assert [p.id for p in library.eligible(1.3)] == ["Photos/tall.jpg"]
+    assert [p.id for p in library.eligible(5.0)] == ["Photos/tall.jpg"]
+
+
+def test_an_auto_crop_never_makes_a_tall_piece_eligible(tmp_path):
+    art = tmp_path / "art"
+    (art / "Photos").mkdir(parents=True)
+    _tall(art / "Photos" / "tall.jpg")
+    crops = _crop_map(tmp_path, {"Photos/tall.jpg": (None, GOOD_BOX)})
+    assert ArtLibrary(art, crops).eligible(1.3) == []
+
+
+def test_a_bad_saved_crop_does_not_make_a_tall_piece_eligible(tmp_path):
+    art = tmp_path / "art"
+    (art / "Photos").mkdir(parents=True)
+    _tall(art / "Photos" / "tall.jpg")
+    crops = _crop_map(
+        tmp_path, {"Photos/tall.jpg": ({"x": 2, "y": 0, "w": 1, "h": 1}, None)}
+    )
+    assert ArtLibrary(art, crops).eligible(1.3) == []
+
+
+def test_a_crop_still_needs_a_readable_image(tmp_path):
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "broken.jpg").write_bytes(b"nope")
+    crops = _crop_map(tmp_path, {"broken.jpg": (GOOD_BOX, None)})
+    assert ArtLibrary(art, crops).eligible(1.3) == []

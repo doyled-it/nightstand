@@ -2308,3 +2308,191 @@ def test_command_during_the_morning_weather_writes_waiting_screen(tmp_path):
     assert meta["screen"] == "weather"
     assert meta["pending"]["state"] == "waiting"
     assert meta["pending"]["reason"] == "screen"
+
+
+# --- crop box redraws ------------------------------------------------------ #
+
+BOX_A = (0.0, 0.0, 0.5, 0.5)
+BOX_B = (0.5, 0.5, 0.5, 0.5)
+
+
+def _crop_cfg(tmp_path, **schedule):
+    cfg = _loop_config(**schedule)
+    return replace(
+        cfg,
+        paths=replace(cfg.paths, state=tmp_path / "state", public=tmp_path / "public"),
+    )
+
+
+def _crop_piece(tmp_path, **box) -> ArtPiece:
+    path = tmp_path / "p.png"
+    Image.new("RGB", (400, 300), PURE["green"]).save(path)
+    return ArtPiece(path=path, title="P", id="p.png", **box)
+
+
+def test_a_changed_box_on_the_shown_piece_redraws_in_quiet_hours(tmp_path):
+    cfg = _crop_cfg(tmp_path, quiet_start="06:00", quiet_end="23:00")
+    sources, display, state = FakeSources(), RecordingDisplay(), AppState()
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A)
+    # The first draw is a scheduled one; do it outside quiet hours.
+    assert run_once(
+        state, cfg, sources, display, datetime(2026, 11, 6, 3, 0, tzinfo=UTC)
+    )
+    # Unchanged box: nothing, even later.
+    assert not run_once(
+        state, cfg, sources, display, datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
+    )
+    # The owner saves a new crop while quiet hours hold scheduled redraws.
+    sources.art_piece = replace(sources.art_piece, crop=BOX_B)
+    assert run_once(
+        state, cfg, sources, display, datetime(2026, 11, 6, 12, 5, tzinfo=UTC)
+    )
+    assert len(display.shown) == 2
+    assert not run_once(
+        state, cfg, sources, display, datetime(2026, 11, 6, 12, 10, tzinfo=UTC)
+    )
+
+
+def test_removing_a_crop_redraws_with_the_auto_box(tmp_path):
+    cfg = _crop_cfg(tmp_path)
+    sources, display, state = FakeSources(), RecordingDisplay(), AppState()
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A, auto_crop=BOX_B)
+    run_once(state, cfg, sources, display, NOON)
+    sources.art_piece = replace(sources.art_piece, crop=None)
+    assert run_once(state, cfg, sources, display, NOON + timedelta(minutes=1))
+    assert len(display.shown) == 2
+
+
+def test_a_changed_box_redraws_through_a_pin(tmp_path):
+    cfg = _crop_cfg(tmp_path)
+    sources, display, state = FakeSources(), RecordingDisplay(), AppState()
+    sources.control = _frame_control(
+        pin=Pin("art", "p.png", NOON + timedelta(hours=2), 1, None)
+    )
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A)
+    run_once(state, cfg, sources, display, NOON)
+    sources.art_piece = replace(sources.art_piece, crop=BOX_B)
+    assert run_once(state, cfg, sources, display, NOON + timedelta(minutes=1))
+
+
+def test_a_changed_box_updates_the_mirror_and_leaves_command_state_alone(tmp_path):
+    cfg = _crop_cfg(tmp_path)
+    sources, display, state = FakeSources(), RecordingDisplay(), AppState()
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A)
+    run_once(state, cfg, sources, display, NOON)
+    before = (tmp_path / "public" / "frame.png").read_bytes()
+    sources.art_piece = replace(sources.art_piece, crop=BOX_B)
+    run_once(state, cfg, sources, display, NOON + timedelta(minutes=1))
+    doc = json.loads((tmp_path / "public" / "frame.json").read_text())
+    assert doc["screen"] == "art"
+    assert "pending" not in doc and "applied_seq" not in doc
+    assert state.cmd_seq is None and state.applied_seq is None
+    assert (tmp_path / "public" / "frame.png").read_bytes() is not None
+    assert before is not None
+
+
+def test_first_sight_of_boxes_is_not_a_redraw_storm(tmp_path):
+    # An upgrade: nothing was recorded, every piece now carries a box. The frame
+    # draws once at startup and does not redraw the shown piece again.
+    cfg = _crop_cfg(tmp_path)
+    sources, display, state = FakeSources(), RecordingDisplay(), AppState()
+    sources.art_piece = _crop_piece(tmp_path, auto_crop=BOX_A)
+    assert run_once(state, cfg, sources, display, NOON)
+    assert not run_once(state, cfg, sources, display, NOON + timedelta(minutes=1))
+    assert not run_once(state, cfg, sources, display, NOON + timedelta(minutes=2))
+    assert len(display.shown) == 1
+
+
+def test_a_restart_in_quiet_hours_does_not_redraw_an_unchanged_box(tmp_path):
+    cfg = _crop_cfg(tmp_path, quiet_start="06:00", quiet_end="23:00")
+    piece = _crop_piece(tmp_path, crop=BOX_A)
+    first = FakeSources()
+    first.art_piece = piece
+    run_once(
+        AppState(),
+        cfg,
+        first,
+        RecordingDisplay(),
+        datetime(2026, 11, 6, 3, 0, tzinfo=UTC),
+    )
+    # A new process: fresh AppState, quiet hours, same box.
+    display = RecordingDisplay()
+    assert not run_once(
+        AppState(), cfg, first, display, datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
+    )
+
+
+def test_a_box_changed_while_the_frame_was_down_redraws_after_restart(tmp_path):
+    cfg = _crop_cfg(tmp_path, quiet_start="06:00", quiet_end="23:00")
+    sources = FakeSources()
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A)
+    run_once(
+        AppState(),
+        cfg,
+        sources,
+        RecordingDisplay(),
+        datetime(2026, 11, 6, 3, 0, tzinfo=UTC),
+    )
+    sources.art_piece = replace(sources.art_piece, crop=BOX_B)
+    assert run_once(
+        AppState(),
+        cfg,
+        sources,
+        RecordingDisplay(),
+        datetime(2026, 11, 6, 12, 0, tzinfo=UTC),
+    )
+
+
+def test_a_box_change_for_a_different_piece_is_not_forced(tmp_path):
+    cfg = _crop_cfg(tmp_path, quiet_start="06:00", quiet_end="23:00")
+    sources, state = FakeSources(), AppState()
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A)
+    run_once(
+        state, cfg, sources, RecordingDisplay(), datetime(2026, 11, 6, 3, 0, tzinfo=UTC)
+    )
+    other = replace(sources.art_piece, id="q.png", crop=BOX_B)
+    sources.art_piece = other
+    assert not run_once(
+        state,
+        cfg,
+        sources,
+        RecordingDisplay(),
+        datetime(2026, 11, 6, 12, 0, tzinfo=UTC),
+    )
+
+
+def test_an_unwritable_drawn_record_never_stops_the_loop(tmp_path, caplog):
+    blocked = tmp_path / "file"
+    blocked.write_text("x")
+    cfg = _crop_cfg(tmp_path)
+    cfg = replace(cfg, paths=replace(cfg.paths, state=blocked / "state"))
+    sources, display, state = FakeSources(), RecordingDisplay(), AppState()
+    sources.art_piece = _crop_piece(tmp_path, crop=BOX_A)
+    with caplog.at_level(logging.WARNING):
+        assert run_once(state, cfg, sources, display, NOON)
+        sources.art_piece = replace(sources.art_piece, crop=BOX_B)
+        assert run_once(state, cfg, sources, display, NOON + timedelta(minutes=1))
+    warnings = [r for r in caplog.records if "drawn" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_live_sources_attach_synced_boxes_and_count_a_crop_as_eligible(tmp_path):
+    from nightstand.crops import CROPS_FILE, CropMap
+
+    art = tmp_path / "art"
+    (art / "Photos").mkdir(parents=True)
+    Image.new("RGB", (300, 600), PURE["blue"]).save(art / "Photos" / "tall.jpg")
+    state_dir = tmp_path / "state"
+    CropMap(state_dir / CROPS_FILE).save(
+        {"Photos/tall.jpg": ({"x": 0, "y": 0, "w": 1, "h": 0.5}, None)}
+    )
+    cfg = replace(_loop_config(), art=replace(Art(), dir=art))
+    transport = httpx.MockTransport(lambda request: httpx.Response(404))
+    with httpx.Client(transport=transport) as client:
+        live = LiveSources(
+            cfg, client, cache_dir=tmp_path, state_dir=state_dir, clock=lambda: NOON
+        )
+        view = live.art(NOON)
+    assert view.piece is not None
+    assert view.piece.id == "Photos/tall.jpg"
+    assert view.piece.crop == (0.0, 0.0, 1.0, 0.5)
