@@ -269,7 +269,22 @@ def test_art_key_is_the_current_piece_id():
     cfg = make_config()
     now = la(2026, 11, 9, 14, 0)
     decision = rules.decide(now, cfg, Context(art=an_art_piece()))
-    assert decision.redraw_key == ("art", "coastal.jpg")
+    assert decision.redraw_key == ("art", "coastal.jpg", None)
+
+
+def test_art_key_carries_the_crop_box_so_a_new_box_redraws():
+    from dataclasses import replace
+
+    cfg = make_config()
+    now = la(2026, 11, 9, 14, 0)
+    piece = an_art_piece()
+    plain = rules.decide(now, cfg, Context(art=piece)).redraw_key
+    saved = replace(piece, crop=(0.0, 0.0, 0.5, 0.5))
+    key = rules.decide(now, cfg, Context(art=saved)).redraw_key
+    assert key == ("art", "coastal.jpg", (0.0, 0.0, 0.5, 0.5))
+    assert key != plain
+    auto = replace(piece, auto_crop=(0.0, 0.0, 0.5, 0.5))
+    assert rules.decide(now, cfg, Context(art=auto)).redraw_key == key
 
 
 def test_forced_decision_pushes_in_quiet_hours_but_scheduled_does_not():
@@ -601,7 +616,7 @@ def test_art_pin_shows_the_pinned_piece():
         now, cfg, Context(art=an_art_piece()), _pin("art", piece="coastal.jpg")
     )
     assert decision.screen == "art"
-    assert decision.redraw_key == ("art", "coastal.jpg")
+    assert decision.redraw_key == ("art", "coastal.jpg", None)
 
 
 def test_weather_pin_shows_the_weather_screen():

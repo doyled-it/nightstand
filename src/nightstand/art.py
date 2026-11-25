@@ -21,8 +21,9 @@ from pathlib import Path
 from random import Random
 from urllib.parse import urlparse
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
+from nightstand.crops import CropMap
 from nightstand.models import ArtPiece
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,10 @@ ENTE_FOLDER_PREFIX = "ente-"
 class ArtLibrary:
     """The art folder: the pieces in it, their captions, and which may rotate."""
 
-    def __init__(self, dir: Path) -> None:
+    def __init__(self, dir: Path, crops_path: Path | None = None) -> None:
         self.dir = Path(dir)
+        # The synced crop boxes (see ``crops``); without a path pieces carry none.
+        self._crops = CropMap(crops_path) if crops_path is not None else None
         # Cache of each image's aspect, keyed by path and invalidated when the
         # file's mtime or size changes, so pick does not decode every image on
         # every cycle just to measure its shape.
@@ -66,21 +69,26 @@ class ArtLibrary:
                     if sub.is_file() and sub.suffix.lower() in _EXTENSIONS
                 )
         paths.sort(key=lambda path: path.relative_to(self.dir).as_posix())
-        return [_piece_for(path, self.dir) for path in paths]
+        boxes = self._crops.load() if self._crops is not None else {}
+        return [_piece_for(path, self.dir, boxes) for path in paths]
 
     def eligible(self, min_aspect: float = 0.0) -> list[ArtPiece]:
         """The pieces that may rotate: those at least ``min_aspect`` wide.
 
         A piece whose image cannot be read, or that is narrower than
         ``min_aspect``, is left out. Pieces in an Ente folder are exempt from
-        the width rule but still need a readable image. The aspect cache means an
-        unchanged image is decoded once rather than on every call.
+        the width rule, and so is a piece with a saved ``crop`` (an
+        ``auto_crop`` never is); both still need a readable image. The aspect
+        cache means an unchanged image is decoded once rather than on every
+        call.
         """
         result = []
         for piece in self.pieces():
             aspect = self._aspect(piece)
             if aspect is not None and (
-                aspect >= min_aspect or is_landscape_exempt(piece)
+                aspect >= min_aspect
+                or is_landscape_exempt(piece)
+                or piece.crop is not None
             ):
                 result.append(piece)
         return result
@@ -109,7 +117,9 @@ class ArtLibrary:
             piece = order[(start + offset) % len(order)]
             aspect = self._aspect(piece)
             if aspect is not None and (
-                aspect >= min_aspect or is_landscape_exempt(piece)
+                aspect >= min_aspect
+                or is_landscape_exempt(piece)
+                or piece.crop is not None
             ):
                 return piece
         return None
@@ -161,18 +171,28 @@ def art_slot(now: datetime, rotate_minutes: int) -> int:
 
 
 def load_piece_image(piece: ArtPiece) -> Image.Image | None:
-    """Open a piece's image as RGB, or ``None`` if the file cannot be read."""
+    """Open a piece's image as upright RGB, or ``None`` if it cannot be read.
+
+    EXIF orientation is applied, so a file that still carries an orientation tag
+    (over SMB, say) is on the same pixel grid the hub measures its crop boxes in.
+    """
     try:
         with Image.open(piece.path) as img:
-            return img.convert("RGB")
+            return ImageOps.exif_transpose(img).convert("RGB")
     except (OSError, UnidentifiedImageError):
         logger.warning("could not read art image %s", piece.path)
         return None
 
 
-def _piece_for(path: Path, root: Path) -> ArtPiece:
+def _piece_for(
+    path: Path, root: Path, boxes: dict | None = None
+) -> ArtPiece:
     title, artist, source_url = _caption(path)
+    pid = path.relative_to(root).as_posix()
+    crop, auto_crop = (boxes or {}).get(pid, (None, None))
     return ArtPiece(
+        crop=crop,
+        auto_crop=auto_crop,
         path=path,
         title=title,
         artist=artist,

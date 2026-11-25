@@ -30,6 +30,8 @@ from pathlib import Path
 
 import httpx
 
+from nightstand.crops import CropMap, parse_box
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 30.0
@@ -54,6 +56,7 @@ def sync_index(
     base_url: str,
     dest: Path,
     enabled: set[str] | None,
+    crops_path: Path | None = None,
 ) -> SyncResult:
     """Mirror the enabled pieces of the index at ``index_url`` into ``dest``.
 
@@ -61,6 +64,11 @@ def sync_index(
     ``enabled`` is the set of folder names to mirror, or ``None`` to mirror every
     folder (the fallback when the control file is missing). See the module
     docstring for the rules.
+
+    ``crops_path``, when given, is the JSON map of each kept piece's ``crop`` and
+    ``auto_crop`` boxes (see ``crops``). It is rewritten atomically only when it
+    changed, lists exactly the pieces on the frame, and a failed write is logged
+    and never fails the sync.
     """
     dest = Path(dest)
     pieces = _fetch_pieces(client, index_url)
@@ -103,7 +111,29 @@ def sync_index(
             kept.add(pid + ".txt")
 
     removed = _remove_stale(dest, kept)
+    if crops_path is not None:
+        _write_boxes(Path(crops_path), wanted, kept)
     return SyncResult(added=added, updated=updated, removed=removed)
+
+
+def _write_boxes(path: Path, wanted: dict[str, dict], kept: set[str]) -> None:
+    """Keep each mirrored piece's boxes in the map at ``path``; prune the rest.
+
+    A malformed box is stored as ``None``. The file is left alone when nothing
+    changed, and a write failure is logged, never raised.
+    """
+    entries = {
+        pid: (parse_box(piece.get("crop")), parse_box(piece.get("auto_crop")))
+        for pid, piece in wanted.items()
+        if pid in kept
+    }
+    crop_map = CropMap(path)
+    if crop_map.load() == entries and path.is_file():
+        return
+    try:
+        crop_map.save(entries)
+    except OSError as error:
+        logger.warning("art crop map write failed: %s", error)
 
 
 def _fetch_pieces(client: httpx.Client, index_url: str) -> list | None:

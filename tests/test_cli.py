@@ -369,7 +369,7 @@ def test_show_passes_saturation(tmp_path, monkeypatch):
 def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_sync_index(client, index_url, base_url, dest, enabled):
+    def fake_sync_index(client, index_url, base_url, dest, enabled, crops_path=None):
         captured["index_url"] = index_url
         captured["base_url"] = base_url
         captured["dest"] = dest
@@ -407,7 +407,7 @@ def test_art_sync_uses_config_hub_and_art_dir(tmp_path, monkeypatch):
 def test_art_sync_falls_back_to_all_folders_without_control(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_sync_index(client, index_url, base_url, dest, enabled):
+    def fake_sync_index(client, index_url, base_url, dest, enabled, crops_path=None):
         captured["base_url"] = base_url
         captured["enabled"] = enabled
         from nightstand.sources.artsync import SyncResult

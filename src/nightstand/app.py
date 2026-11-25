@@ -32,6 +32,7 @@ from PIL import Image
 from nightstand import rules
 from nightstand.art import ArtLibrary, load_piece_image
 from nightstand.config import Config, Location
+from nightstand.crops import CROPS_FILE, DRAWN_FILE, load_drawn, save_drawn
 from nightstand.display import Display, InkyDisplay
 from nightstand.history import ArtHistory
 from nightstand.models import ArtPiece, Health, NowPlaying
@@ -204,7 +205,7 @@ class LiveSources:
             client, cache / "covers", f"http://{self._hub_authority}"
         )
         self._logos = LogoCache(client, cache / "logos")
-        self._art = ArtLibrary(cfg.art.dir)
+        self._art = ArtLibrary(cfg.art.dir, state / CROPS_FILE)
         self._rotation = Rotation(state / "rotation.json", self._clock)
         # When each currently-failing source first failed, and when each health
         # URL was first unreachable (for the 15-minute grace).
@@ -532,6 +533,13 @@ class AppState:
     cmd_seq: int | None = None
     cmd_id: str | None = None
     applied_seq: int | None = None
+    #: The art piece and effective crop box last drawn, mirrored in the state
+    #: dir (``art-drawn.json``) so a restart still knows. ``drawn_loaded`` is
+    #: whether the file has been read this process; ``drawn_write_failing`` logs
+    #: a write outage once.
+    drawn: tuple[str, tuple | None] | None = None
+    drawn_loaded: bool = False
+    drawn_write_failing: bool = False
 
 
 def _settled(
@@ -679,6 +687,16 @@ def run_once(
         # A command (next, previous, show) just changed the piece: redraw now,
         # even in quiet hours.
         decision = replace(decision, forced=True)
+    elif (
+        decision.screen == "art"
+        and art_piece is not None
+        and _box_changed(state, cfg, art_piece)
+    ):
+        # The owner saved, edited or removed the crop of the piece on the panel:
+        # redraw it with the new box on the same fast path commands use (quiet
+        # hours and a pin do not hold it). It is not a command, so ``pending``
+        # and ``applied_seq`` are untouched.
+        decision = replace(decision, forced=True)
 
     identity = (np.title, np.artist, np.album) if np is not None else None
     # A command that moved the piece this cycle: remember it so the mirror can
@@ -783,11 +801,42 @@ def run_once(
         # track what was shown, not the clock (final review Important-1). A
         # command already advanced in ``apply``, so this is then a no-op.
         sources.commit_art(now)
+        _record_drawn(state, cfg, art_piece)
         if history is not None:
             # The history itself drops a piece that is already current, so a
             # redraw under the same slot (a marker flip, say) adds no duplicate.
             _record_history(state, history, art_piece, now)
     return True
+
+
+def _box_changed(state: AppState, cfg: Config, piece: ArtPiece) -> bool:
+    """Whether ``piece`` is what the panel last drew but with a different box.
+
+    A piece never recorded (the first run after an upgrade, or a different piece
+    than the last drawn) is not a change: boxes newly appearing for every piece
+    must not cause a redraw storm, and a new piece redraws on its own schedule.
+    """
+    if not state.drawn_loaded:
+        state.drawn_loaded = True
+        state.drawn = load_drawn(cfg.paths.state / DRAWN_FILE)
+    drawn = state.drawn
+    return drawn is not None and drawn[0] == piece.id and drawn[1] != piece.box
+
+
+def _record_drawn(state: AppState, cfg: Config, piece: ArtPiece) -> None:
+    """Remember the piece and box just drawn, surviving any write failure."""
+    state.drawn_loaded = True
+    state.drawn = (piece.id, piece.box)
+    try:
+        save_drawn(cfg.paths.state / DRAWN_FILE, piece.id, piece.box)
+    except OSError as error:
+        if not state.drawn_write_failing:
+            state.drawn_write_failing = True
+            logger.warning("art drawn-box record write failed: %s", error)
+        return
+    if state.drawn_write_failing:
+        state.drawn_write_failing = False
+        logger.info("art drawn-box record write recovered")
 
 
 def _wait_reason(screen: str, pin) -> str:
